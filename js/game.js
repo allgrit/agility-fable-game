@@ -118,7 +118,7 @@ export class Run {
     // Скорость
     let target = this.baseSpeed() * this.comboMul();
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
-    if (this.slowT > 0) { target *= 0.45; this.slowT -= dt; }
+    if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
     if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
       // На "синхронных" снарядах не убегаем дальше точки ожидания.
       const waitAt = this._waitPoint(m);
@@ -220,7 +220,7 @@ export class Run {
       this.score.misses++;
       this.score.combo = 0;
       this.score.faults += faults;
-      this.slowT = 0.9;
+      this.slowT = 0.6;
       this.audio.miss();
       this.audio.gasp();
       this.audio.crowdLevel(0.15);
@@ -345,13 +345,22 @@ export class Run {
     r.drawStartFinish(this.course.finish, 'ФИНИШ');
     r.drawJudge(this.course.field.w - 6, 5);
 
-    // Снаряды в порядке y для правильного перекрытия
+    // Снаряды в порядке y; собака рисуется поверх снаряда, на котором стоит.
     const sorted = [...this.marks].sort((a, b) => a.o.y - b.o.y);
     const dogY = this.dog.y;
-    for (const m of sorted) if (m.o.y <= dogY || m.o.type === 'tunnel') r.drawObstacle(m.o, m.state);
-    if (!this.dog.hidden) r.drawDog(this.dog, this.breed);
-    else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
-    for (const m of sorted) if (m.o.y > dogY && m.o.type !== 'tunnel') r.drawObstacle(m.o, m.state);
+    const onMark = this.marks.find(mm =>
+      this.dog.dist >= mm.entryD - 0.2 && this.dog.dist <= mm.exitD + 0.2 && mm.o.type !== 'tunnel');
+    const drawDog = () => {
+      if (!this.dog.hidden) r.drawDog(this.dog, this.breed);
+      else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
+    };
+    let dogDrawn = false;
+    for (const m of sorted) {
+      if (!onMark && !dogDrawn && m.o.y > dogY && m.o.type !== 'tunnel') { drawDog(); dogDrawn = true; }
+      r.drawObstacle(m.o, m.state);
+      if (onMark && m === onMark) { drawDog(); dogDrawn = true; }
+    }
+    if (!dogDrawn) drawDog();
 
     r.drawHandler(this.handler);
     if (this.handler.speech) r.drawSpeech(this.handler, this.handler.speech.text, this.handler.speech.urgency);

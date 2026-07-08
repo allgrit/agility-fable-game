@@ -5,6 +5,12 @@ export class AudioEngine {
     this.master = null;
     this.crowdGain = null;
     this.enabled = true;
+    this.muted = false;
+  }
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.master) this.master.gain.value = m ? 0 : 0.55;
   }
 
   ensure() {
@@ -12,7 +18,7 @@ export class AudioEngine {
     try {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.55;
+      this.master.gain.value = this.muted ? 0 : 0.55;
       this.master.connect(this.ctx.destination);
       this._noise = this._makeNoise();
       this._startCrowd();

@@ -37,10 +37,39 @@ resize();
 
 // ---------- УПРАВЛЕНИЕ ----------
 const KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window
+  || location.search.includes('touch');
+
+audio.setMuted(localStorage.getItem('agility_muted') === '1');
+function toggleMute() {
+  audio.setMuted(!audio.muted);
+  localStorage.setItem('agility_muted', audio.muted ? '1' : '0');
+}
+
+// Виртуальные тач-кнопки: D-pad слева, «ХОП» (Space) справа.
+function touchButtons() {
+  const w = canvas.width, h = canvas.height;
+  const u = Math.min(w, h) * 0.085;          // радиус кнопки
+  const cx = u * 2.4, cy = h - u * 2.6;      // центр D-pad
+  return [
+    { code: 'ArrowUp',    x: cx,           y: cy - u * 1.35, r: u, label: '↑' },
+    { code: 'ArrowDown',  x: cx,           y: cy + u * 1.35, r: u, label: '↓' },
+    { code: 'ArrowLeft',  x: cx - u * 1.35, y: cy,           r: u, label: '←' },
+    { code: 'ArrowRight', x: cx + u * 1.35, y: cy,           r: u, label: '→' },
+    { code: 'Space', x: w - u * 2.2, y: h - u * 2.4, r: u * 1.5, label: 'ХОП' },
+  ];
+}
+const touchPointers = new Map(); // pointerId → key code
+
+function muteZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 130 * z, r: 26 * z };
+}
 window.addEventListener('keydown', (e) => {
   if (KEYS.includes(e.code)) e.preventDefault();
   if (e.repeat) return;
   audio.ensure();
+  if (e.code === 'KeyM') return toggleMute();
   if (app.state === 'menu') return menuKey(e.code);
   if (app.state === 'results') return resultsKey(e.code);
   if (app.state === 'run') {
@@ -54,9 +83,30 @@ window.addEventListener('keyup', (e) => {
 });
 canvas.addEventListener('pointerdown', (e) => {
   audio.ensure();
+  const mz = muteZone();
+  if (Math.hypot(e.clientX - mz.x, e.clientY - mz.y) < mz.r) { toggleMute(); return; }
+  if (app.state === 'run') {
+    for (const b of touchButtons()) {
+      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) <= b.r * 1.25) {
+        touchPointers.set(e.pointerId, b.code);
+        app.run.input(b.code, true);
+        return;
+      }
+    }
+    return;
+  }
   if (app.state === 'menu') menuClick(e.clientX, e.clientY);
   else if (app.state === 'results') resultsKey('Enter');
 });
+function releaseTouch(e) {
+  const code = touchPointers.get(e.pointerId);
+  if (code) {
+    touchPointers.delete(e.pointerId);
+    if (app.state === 'run') app.run.input(code, false);
+  }
+}
+canvas.addEventListener('pointerup', releaseTouch);
+canvas.addEventListener('pointercancel', releaseTouch);
 
 function menuKey(code) {
   if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); }
@@ -87,7 +137,7 @@ function menuClick(x, y) {
 function resultsKey(code) {
   if (code === 'Enter' || code === 'Space') {
     if (app.mode === 'career') {
-      if (app.result && app.result.clean) app.cls = nextClass(app.cls);
+      if (app.result && app.result.qualified) app.cls = nextClass(app.cls);
       app.seed++;
     } else {
       app.realIdx = (app.realIdx + 1) % REAL_COURSES.length;
@@ -171,6 +221,50 @@ function drawHud(run) {
   // QTE-индикатор
   const m = run.activeMark;
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running') drawQte(run, m, z);
+
+  if (IS_TOUCH) drawTouchControls(run);
+}
+
+function expectedKey(run) {
+  const m = run?.activeMark;
+  if (!m || !m.qte || m.qte.state !== 'active') return null;
+  const q = m.qte, d = q.def;
+  if (d.kind === 'rhythm') return d.keys[q.beatIdx % 2];
+  if (d.kind === 'twoStage') return q.stage === 1 ? d.key2 : d.key;
+  return d.key;
+}
+
+function drawTouchControls(run) {
+  const ctx = renderer.ctx;
+  const hot = expectedKey(run);
+  for (const b of touchButtons()) {
+    const active = touchPointers.size && [...touchPointers.values()].includes(b.code);
+    ctx.save();
+    ctx.globalAlpha = active ? 0.9 : 0.55;
+    ctx.fillStyle = active ? 'rgba(255,213,74,0.5)' : 'rgba(10,20,15,0.5)';
+    ctx.strokeStyle = b.code === hot ? '#ffd54a' : 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = b.code === hot ? 5 : 2.5;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `900 ${Math.round(b.r * (b.label.length > 1 ? 0.5 : 0.9))}px "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, b.x, b.y + 2);
+    ctx.restore();
+  }
+}
+
+function drawMuteIcon() {
+  const ctx = renderer.ctx;
+  const mz = muteZone();
+  ctx.save();
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = 'rgba(10,20,15,0.55)';
+  ctx.beginPath(); ctx.arc(mz.x, mz.y, mz.r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = audio.muted ? '#ff8a8a' : '#fff';
+  ctx.font = `${Math.round(mz.r * 1.1)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(audio.muted ? '🔇' : '🔊', mz.x, mz.y + 2);
+  ctx.restore();
 }
 
 function panel(ctx, x, y, w, h) {
@@ -186,7 +280,7 @@ function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
   const t = run.time - m.qteStart;
-  const cx = w / 2, cy = h - 130 * z;
+  const cx = w / 2, cy = h - (IS_TOUCH ? 300 : 130) * z;
 
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -438,7 +532,7 @@ function drawResults(run, z) {
   ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
   const nextLabel = app.mode === 'career'
-    ? (res.clean && app.cls !== 'masters' ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!` : 'ENTER — следующая трасса')
+    ? (res.qualified && app.cls !== 'masters' ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!` : 'ENTER — следующая трасса')
     : 'ENTER — следующая трасса чемпионата';
   ctx.fillText(nextLabel, w / 2, py + ph - 64 * z);
   ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
@@ -456,6 +550,7 @@ function frame(now) {
 
   if (app.state === 'menu') {
     drawMenu(dt);
+    drawMuteIcon();
   } else if (app.run) {
     renderer.begin(dt);
     app.run.update(dt);
@@ -466,6 +561,7 @@ function frame(now) {
       app.state = 'results';
     }
     if (app.state === 'results') drawResults(app.run, z);
+    drawMuteIcon();
     for (const e of app.run.drainEvents()) {
       // события уже озвучены внутри Run; здесь место для метрик/отладки
       if (window.__agilityEvents) window.__agilityEvents.push(e);

@@ -13,12 +13,12 @@ export const QTE_DEFS = {
   wall:    { kind: 'press', key: 'Space',     command: 'Хоп!',        window: 0.52, lead: 1.0 },
   broad:   { kind: 'press', key: 'Space',     command: 'Хоп-хоп!',    window: 0.52, lead: 1.0 },
   tunnel:  { kind: 'press', key: 'ArrowDown', command: 'Туннель!',    window: 0.60, lead: 1.1 },
-  weave:   { kind: 'rhythm', keys: ['ArrowLeft', 'ArrowRight'], beats: 6, beat: 0.42,
-             command: 'Змейка!', window: 0.34, lead: 1.1 },
+  weave:   { kind: 'rhythm', keys: ['ArrowLeft', 'ArrowRight'], beats: 6, beat: 0.46,
+             command: 'Змейка!', window: 0.38, lead: 1.2 },
   aframe:  { kind: 'holdRelease', key: 'ArrowUp', command: 'Вперёд!', zoneCmd: 'Зона!',
-             window: 0.5, lead: 1.1, travel: 1.6, zone: [0.72, 0.97] },
+             window: 0.6, lead: 1.1, travel: 1.6, zone: [0.72, 0.97] },
   dogwalk: { kind: 'holdRelease', key: 'ArrowUp', command: 'Вперёд!', zoneCmd: 'Зона!',
-             window: 0.5, lead: 1.1, travel: 2.2, zone: [0.78, 0.98] },
+             window: 0.65, lead: 1.1, travel: 2.2, zone: [0.78, 0.98] },
   seesaw:  { kind: 'twoStage', key: 'ArrowUp', key2: 'Space', command: 'Качели!', tipCmd: 'Жди!',
              window: 0.5, lead: 1.1, tipDelay: 0.9, window2: 0.42 },
   table:   { kind: 'hold', key: 'Space', command: 'Стол!', holdCmd: 'Ждать…',
@@ -51,6 +51,7 @@ export class Qte {
     this.beatGrades = [];
     this.holding = false;
     this.stage = 0;
+    this.stageGrade = 'good';   // защитная инициализация для twoStage
     this.holdStart = null;
     this.progress = 0;         // для шкал (стол, контактные)
   }

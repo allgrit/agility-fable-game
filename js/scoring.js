@@ -31,6 +31,8 @@ export function finalScore({ time, sct, faults, perfects, total, maxCombo }) {
   const tf = timeFaults(time, sct);
   const totalFaults = faults + tf;
   const clean = faults === 0 && tf === 0;
+  // Квалификация для прогрессии мягче титула Q: как Novice-судейство (<=5 faults).
+  const qualified = totalFaults <= 5;
   let stars = 0;
   if (totalFaults === 0) stars = perfects >= total * 0.7 ? 3 : 2;
   else if (totalFaults <= 5) stars = 1;
@@ -40,7 +42,7 @@ export function finalScore({ time, sct, faults, perfects, total, maxCombo }) {
   const points = Math.max(0, Math.round(
     1000 * (total ? perfects / total : 0) + maxCombo * 50 + Math.max(0, sct - time) * 20 - totalFaults * 30
   ));
-  return { timeFaults: tf, totalFaults, clean, stars, title, points };
+  return { timeFaults: tf, totalFaults, clean, qualified, stars, title, points };
 }
 
 export const CLASS_ORDER = ['novice', 'open', 'excellent', 'masters'];
