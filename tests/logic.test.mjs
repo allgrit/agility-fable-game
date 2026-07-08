@@ -1,0 +1,180 @@
+// Тесты чистой логики: node --test tests/logic.test.mjs
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { generateCourse, validateCourse, CLASSES } from '../js/course.js';
+import { Path } from '../js/spline.js';
+import { Qte, QTE_DEFS, gradeFromDelta, qteDuration } from '../js/qte.js';
+import { computeSct, timeFaults, finalScore, BREEDS, nextClass } from '../js/scoring.js';
+
+test('генератор: 200 сидов по всем классам дают валидные трассы', () => {
+  for (const cls of Object.keys(CLASSES)) {
+    for (let seed = 1; seed <= 50; seed++) {
+      const c = generateCourse(seed, cls);
+      const errs = validateCourse(c);
+      assert.deepEqual(errs, [], `seed=${seed} cls=${cls}: ${errs.join('; ')}`);
+    }
+  }
+});
+
+test('генератор: детерминизм по сиду', () => {
+  const a = generateCourse(42, 'open');
+  const b = generateCourse(42, 'open');
+  assert.deepEqual(a.obstacles.map(o => [o.type, o.x.toFixed(3), o.y.toFixed(3)]),
+    b.obstacles.map(o => [o.type, o.x.toFixed(3), o.y.toFixed(3)]));
+});
+
+test('генератор: первый и последний снаряды — прыжковые', () => {
+  const easy = ['jump', 'tire', 'wall', 'broad'];
+  for (let seed = 1; seed <= 30; seed++) {
+    const c = generateCourse(seed, 'masters');
+    assert.ok(easy.includes(c.obstacles[0].type), `seed=${seed} first=${c.obstacles[0].type}`);
+    assert.ok(easy.includes(c.obstacles.at(-1).type), `seed=${seed} last=${c.obstacles.at(-1).type}`);
+  }
+});
+
+test('путь: длина положительна, точки монотонны по дистанции', () => {
+  const c = generateCourse(7, 'excellent');
+  const p = new Path(c.pathPoints);
+  assert.ok(p.length > 60, `path too short: ${p.length}`);
+  for (let i = 1; i < p.pointDists.length; i++) {
+    assert.ok(p.pointDists[i] >= p.pointDists[i - 1] - 0.5,
+      `pointDists not monotonic at ${i}: ${p.pointDists[i - 1]} -> ${p.pointDists[i]}`);
+  }
+  const mid = p.pointAt(p.length / 2);
+  assert.ok(Number.isFinite(mid.x) && Number.isFinite(mid.y));
+});
+
+test('QTE press: perfect в целевой момент, miss при неверной клавише и таймауте', () => {
+  let q = new Qte('jump');
+  q.update(0.1);
+  q.press('Space', q.target);
+  assert.equal(q.result.grade, 'perfect');
+
+  q = new Qte('jump');
+  q.update(0.1);
+  q.press('ArrowDown', q.target);
+  assert.equal(q.result.grade, 'miss');
+  assert.equal(q.result.faults, 5);
+
+  q = new Qte('tunnel');
+  q.update(0.1);
+  q.update(q.target + QTE_DEFS.tunnel.window + 0.1);
+  assert.equal(q.result.grade, 'miss');
+});
+
+test('QTE rhythm (слалом): все биты вовремя → perfect, пропуск → miss+5', () => {
+  let q = new Qte('weave');
+  q.update(0.01);
+  const d = QTE_DEFS.weave;
+  for (let i = 0; i < d.beats; i++) {
+    q.press(d.keys[i % 2], q.target + i * d.beat);
+  }
+  assert.equal(q.result.grade, 'perfect');
+
+  q = new Qte('weave');
+  q.update(0.01);
+  q.update(q.target + d.beats * d.beat + d.window + 1);
+  assert.equal(q.result.grade, 'miss');
+  assert.equal(q.result.faults, 5);
+});
+
+test('QTE holdRelease (горка): отпускание в зоне ок, раньше зоны — 5 фолтов', () => {
+  const d = QTE_DEFS.aframe;
+  let q = new Qte('aframe');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  const zoneMid = (d.zone[0] + d.zone[1]) / 2;
+  q.update(q.target + d.travel * zoneMid);
+  q.release('ArrowUp', q.target + d.travel * zoneMid);
+  assert.equal(q.result.grade, 'perfect');
+  assert.equal(q.result.faults, 0);
+
+  q = new Qte('aframe');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  q.update(q.target + d.travel * 0.3);
+  q.release('ArrowUp', q.target + d.travel * 0.3);
+  assert.equal(q.result.grade, 'miss');
+  assert.equal(q.result.faults, 5);
+});
+
+test('QTE holdRelease: не отпустил — late без фолтов (собака дошла сама)', () => {
+  const d = QTE_DEFS.dogwalk;
+  const q = new Qte('dogwalk');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  q.update(q.target + d.travel + 0.2);
+  assert.equal(q.result.grade, 'late');
+  assert.equal(q.result.faults, 0);
+});
+
+test('QTE twoStage (качели): обе стадии вовремя → успех, ранний прыжок → miss', () => {
+  const d = QTE_DEFS.seesaw;
+  let q = new Qte('seesaw');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  assert.equal(q.state, 'active');
+  q.press('Space', q.target + d.tipDelay);
+  assert.equal(q.result.grade, 'perfect');
+
+  q = new Qte('seesaw');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  q.press('Space', q.target + 0.05); // сильно раньше опускания
+  assert.equal(q.result.grade, 'miss');
+});
+
+test('QTE hold (стол): выдержка полная → успех, ранний сход → 5 фолтов', () => {
+  const d = QTE_DEFS.table;
+  let q = new Qte('table');
+  q.update(0.01);
+  q.press('Space', q.target);
+  q.update(q.target + d.holdTime + 0.05);
+  assert.equal(q.result.grade, 'perfect');
+
+  q = new Qte('table');
+  q.update(0.01);
+  q.press('Space', q.target);
+  q.update(q.target + 1.0);
+  q.release('Space', q.target + 1.0);
+  assert.equal(q.result.grade, 'miss');
+  assert.equal(q.result.faults, 5);
+});
+
+test('градации тайминга симметричны и упорядочены', () => {
+  assert.equal(gradeFromDelta(0, 0.5), 'perfect');
+  assert.equal(gradeFromDelta(-0.13, 0.5), 'perfect');
+  assert.equal(gradeFromDelta(0.2, 0.5), 'good');
+  assert.equal(gradeFromDelta(-0.4, 0.5), 'late');
+  assert.equal(gradeFromDelta(0.6, 0.5), 'miss');
+});
+
+test('qteDuration покрывает все типы', () => {
+  for (const type of Object.keys(QTE_DEFS)) {
+    assert.ok(qteDuration(type) > 0.5, type);
+  }
+});
+
+test('скоринг: SCT, time faults, чистый прогон и звёзды', () => {
+  assert.equal(computeSct(160, 'novice', 3.2), 50);
+  assert.equal(timeFaults(52.3, 50), 3);
+  assert.equal(timeFaults(49.9, 50), 0);
+
+  const clean = finalScore({ time: 40, sct: 50, faults: 0, perfects: 10, total: 12, maxCombo: 6 });
+  assert.equal(clean.clean, true);
+  assert.equal(clean.stars, 3);
+  assert.match(clean.title, /Q/);
+
+  const faulty = finalScore({ time: 55, sct: 50, faults: 10, perfects: 2, total: 12, maxCombo: 1 });
+  assert.equal(faulty.clean, false);
+  assert.equal(faulty.totalFaults, 15);
+  assert.equal(faulty.stars, 0);
+});
+
+test('породы: у всех заданы модификаторы, классы по порядку', () => {
+  for (const b of Object.values(BREEDS)) {
+    assert.ok(b.speedMul > 0.5 && b.windowScale > 0.5 && b.size > 0);
+  }
+  assert.equal(nextClass('novice'), 'open');
+  assert.equal(nextClass('masters'), 'masters');
+});
