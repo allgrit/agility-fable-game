@@ -118,6 +118,11 @@ export class Renderer {
     const dx = Math.cos(o.angle), dy = Math.sin(o.angle);
     const px = -dy, py = dx; // перпендикуляр
     const num = state.done ? null : String(o.i);
+    if (o.skipGeom) {
+      // Повторное прохождение того же снаряда: геометрия уже нарисована, только номер.
+      if (num) this._numberTag(o, num, state.active);
+      return;
+    }
 
     switch (o.type) {
       case 'jump': {
