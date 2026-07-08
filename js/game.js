@@ -225,7 +225,8 @@ export class Run {
       this.audio.gasp();
       this.audio.crowdLevel(0.15);
       this.r.shake(0.55);
-      if (m.o.type === 'jump' || m.o.type === 'wall') {
+      const isKnock = (m.o.type === 'jump' || m.o.type === 'wall') && label !== 'Отказ!';
+      if (isKnock) {
         m.state.knocked = true;
         this.audio.knock();
         this.fx.barPieces(m.o.x, m.o.y, m.o.angle);
