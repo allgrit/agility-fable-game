@@ -246,3 +246,14 @@ test('press: первое раннее нажатие прощается, вто
   q2.press('Space', q2.target); // затем идеально
   assert.equal(q2.result.grade, 'perfect');
 });
+
+test('прогрессия внутри Novice: variant добавляет слалом и горку', () => {
+  const plain = generateCourse(1011 + 37 + 11, 'novice');
+  assert.ok(!plain.obstacles.some(o => o.type === 'weave'), 'на 1-й трассе не должно быть слалома');
+  const withWeave = generateCourse(1011 + 3 * 37 + 11, 'novice', { weave: true });
+  assert.equal(withWeave.obstacles.filter(o => o.type === 'weave').length, 1);
+  assert.deepEqual(validateCourse(withWeave), []);
+  const withContact = generateCourse(1011 + 5 * 37 + 11, 'novice', { weave: true, contacts: 1 });
+  assert.ok(withContact.obstacles.some(o => ['aframe', 'dogwalk', 'seesaw'].includes(o.type)));
+  assert.deepEqual(validateCourse(withContact), []);
+});

@@ -34,8 +34,8 @@ export const OBSTACLES = {
 export const CONTACT_TYPES = ['aframe', 'dogwalk', 'seesaw'];
 
 // Список типов снарядов для класса с учётом правил (слалом x1, шина <=1, стол <=1).
-function buildTypeList(rng, cls) {
-  const c = CLASSES[cls];
+function buildTypeList(rng, cls, variant) {
+  const c = { ...CLASSES[cls], ...variant };
   const types = [];
   const contacts = CONTACT_TYPES.filter(t => c.seesaw || t !== 'seesaw');
   for (let i = 0; i < c.contacts; i++) {
@@ -131,10 +131,11 @@ function tryLayout(rng, types) {
   return { obstacles, start, finish };
 }
 
-export function generateCourse(seed, cls = 'novice') {
+// variant позволяет переопределить состав снарядов (например, прогрессия внутри Novice).
+export function generateCourse(seed, cls = 'novice', variant = {}) {
   const rng = makeRng(seed);
   for (let attempt = 0; attempt < 120; attempt++) {
-    const types = buildTypeList(rng, cls);
+    const types = buildTypeList(rng, cls, variant);
     const layout = tryLayout(rng, types);
     if (!layout) continue;
     const pathPoints = [layout.start];
@@ -142,6 +143,7 @@ export function generateCourse(seed, cls = 'novice') {
     pathPoints.push(layout.finish);
     return {
       seed, cls, class: CLASSES[cls],
+      rules: { ...CLASSES[cls], ...variant },
       obstacles: layout.obstacles,
       start: layout.start, finish: layout.finish,
       pathPoints, field: FIELD,
@@ -157,7 +159,7 @@ export function validateCourse(course) {
     counts[o.type] = (counts[o.type] || 0) + 1;
     if (!inBounds(o.entry) || !inBounds(o.exit)) errs.push(`obstacle ${o.i} out of bounds`);
   }
-  const cc = CLASSES[course.cls];
+  const cc = course.rules || CLASSES[course.cls];
   if ((counts.weave || 0) !== (cc.weave ? 1 : 0)) errs.push('weave count mismatch');
   if ((counts.tire || 0) > 1) errs.push('tire > 1');
   if ((counts.table || 0) > (cc.table ? 1 : 0)) errs.push('table not allowed / > 1');

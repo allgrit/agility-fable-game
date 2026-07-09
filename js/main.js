@@ -321,7 +321,11 @@ function startRun() {
     course = generateCourse(todayNum() * 13 + 7, dailyCls());
     course.name = `Трасса дня ${todayStr()}`;
   } else {
-    course = generateCourse(careerSeed(app.cls, app.stage), app.cls);
+    // Прогрессия внутри Novice: 1-2 — только прыжки, 3-4 — + слалом, 5 — + горка (превью Open).
+    const variant = app.cls === 'novice'
+      ? { weave: app.stage >= 3, contacts: app.stage >= 5 ? 1 : 0 }
+      : {};
+    course = generateCourse(careerSeed(app.cls, app.stage), app.cls, variant);
     course.name = `${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   }
   const mod = MODIFIERS[activeModifier()];

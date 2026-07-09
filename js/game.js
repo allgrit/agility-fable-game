@@ -162,6 +162,14 @@ export class Run {
     d.speed += (target - d.speed) * Math.min(1, dt * 5);
     d.dist += d.speed * dt;
 
+    // Пузырь хендлера нервничает синхронно с приближением к точке нажатия.
+    if (this.handler.speech && m && m.qte && m.qte.state === 'active'
+        && m.qte.def.kind === 'press') {
+      const dd = m.entryD - TAKEOFF - d.dist;
+      const v = Math.max(d.speed, 0.5);
+      this.handler.speech.urgency = Math.max(0, Math.min(1, 1 - dd / (v * 1.1)));
+    }
+
     // Завершение снаряда: собака миновала выход
     if (m && m.resolved && d.dist > m.exitD + 0.5) {
       m.state.active = false;
