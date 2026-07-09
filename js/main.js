@@ -163,13 +163,13 @@ function touchButtons() {
   const w = canvas.width, h = canvas.height;
   // Радиус под палец: на узких высоких экранах опираемся на ширину.
   const u = Math.max(Math.min(w * 0.095, h * 0.06), Math.min(w, h) * 0.055);
-  const cx = u * 2.3, cy = h - u * 2.5;      // центр D-pad
+  const cx = u * 2.3, cy = h - u * 3.6;      // центр D-pad — повыше от кромки
   return [
     { code: 'ArrowUp',    x: cx,            y: cy - u * 1.18, r: u, label: '↑' },
     { code: 'ArrowDown',  x: cx,            y: cy + u * 1.18, r: u, label: '↓' },
     { code: 'ArrowLeft',  x: cx - u * 1.18, y: cy,            r: u, label: '←' },
     { code: 'ArrowRight', x: cx + u * 1.18, y: cy,            r: u, label: '→' },
-    { code: 'Space', x: w - u * 2.0, y: h - u * 2.2, r: u * 1.45, label: 'ХОП' },
+    { code: 'Space', x: w - u * 2.0, y: h - u * 3.2, r: u * 1.45, label: 'ХОП' },
   ];
 }
 const touchPointers = new Map(); // pointerId → key code
@@ -407,18 +407,31 @@ function expectedKey(run) {
 function drawTouchControls(run) {
   const ctx = renderer.ctx;
   const hot = expectedKey(run);
+  // «Когда жать»: в окне нажатия мигание учащается и кнопка вспыхивает целиком.
+  let urgency = 0; // 0 — просто ожидается, 1 — good-окно, 2 — perfect
+  const m = run?.activeMark;
+  if (m && m.qte && m.qte.state === 'active' && m.qte.def.kind === 'press') {
+    const v = Math.max(run.dog.speed, 0.5);
+    const dd = m.entryD - TAKEOFF_UI - run.dog.dist;
+    if (Math.abs(dd) <= m.qte.w * 0.28 * v) urgency = 2;
+    else if (Math.abs(dd) <= m.qte.w * 0.6 * v) urgency = 1;
+  }
+  const t = run?.time ?? app.t;
   for (const b of touchButtons()) {
     const active = touchPointers.size && [...touchPointers.values()].includes(b.code);
     const isHot = b.code === hot;
+    const blinkHz = urgency === 2 ? 14 : urgency === 1 ? 8 : 4;
+    const blinkOn = Math.sin(t * blinkHz * Math.PI) > -0.2;
     ctx.save();
     // Плотный фон — кнопки не должны тонуть в толпе и траве.
-    ctx.fillStyle = active ? 'rgba(255,213,74,0.85)' : 'rgba(8,16,12,0.88)';
-    ctx.strokeStyle = isHot ? '#ffd54a' : 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = isHot ? 7 : 3;
-    if (isHot) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 18; }
+    const flash = isHot && urgency === 2 && blinkOn;
+    ctx.fillStyle = active || flash ? 'rgba(255,213,74,0.9)' : 'rgba(8,16,12,0.88)';
+    ctx.strokeStyle = isHot ? (blinkOn ? '#ffd54a' : 'rgba(255,255,255,0.5)') : 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = isHot && blinkOn ? 7 : 3;
+    if (isHot && blinkOn) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = urgency === 2 ? 26 : 14; }
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = active ? '#1a1a1a' : '#fff';
+    ctx.fillStyle = active || flash ? '#1a1a1a' : '#fff';
     ctx.font = `900 ${Math.round(b.r * (b.label.length > 1 ? 0.48 : 0.85))}px "Segoe UI", sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(b.label, b.x, b.y + 2);
