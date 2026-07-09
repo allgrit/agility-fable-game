@@ -11,7 +11,7 @@ export class Run {
     this.course = course;
     this.breed = breed;
     this.modifier = modifier;
-    this.windowScale = breed.windowScale * windowMul;
+    this.windowScale = breed.windowScale * windowMul * (course.class.windowMul || 1);
     this.eliminated = false;
     this.audio = audio;
     this.fx = particles;

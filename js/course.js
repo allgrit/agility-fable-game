@@ -3,11 +3,12 @@ import { makeRng } from './rng.js';
 
 export const FIELD = { w: 52, h: 36, margin: 4 };
 
+// windowMul — множитель окна реакции: новичкам заметно легче, мастерам строже.
 export const CLASSES = {
-  novice:    { name: 'Novice',    count: 12, contacts: 1, dogSpeed: 4.6, sctSpeed: 3.2 },
-  open:      { name: 'Open',      count: 14, contacts: 1, dogSpeed: 5.0, sctSpeed: 3.6 },
-  excellent: { name: 'Excellent', count: 16, contacts: 2, dogSpeed: 5.4, sctSpeed: 4.0 },
-  masters:   { name: 'Masters',   count: 18, contacts: 2, dogSpeed: 5.8, sctSpeed: 4.4 },
+  novice:    { name: 'Novice',    count: 12, contacts: 1, dogSpeed: 4.2, sctSpeed: 3.0, windowMul: 1.45 },
+  open:      { name: 'Open',      count: 14, contacts: 1, dogSpeed: 4.8, sctSpeed: 3.5, windowMul: 1.2 },
+  excellent: { name: 'Excellent', count: 16, contacts: 2, dogSpeed: 5.4, sctSpeed: 4.0, windowMul: 1.0 },
+  masters:   { name: 'Masters',   count: 18, contacts: 2, dogSpeed: 5.8, sctSpeed: 4.4, windowMul: 0.9 },
 };
 
 // Длина снаряда вдоль оси движения (м) и минимальный разбег перед ним.

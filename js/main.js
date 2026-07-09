@@ -157,17 +157,18 @@ function toggleMute() {
   localStorage.setItem('agility_muted', audio.muted ? '1' : '0');
 }
 
-// Виртуальные тач-кнопки: D-pad слева, «ХОП» (Space) справа.
+// Виртуальные тач-кнопки: компактный D-pad слева, «ХОП» (Space) справа.
+// Радиус масштабируется от ширины, чтобы всё влезало на узких телефонах.
 function touchButtons() {
   const w = canvas.width, h = canvas.height;
-  const u = Math.min(w, h) * 0.085;          // радиус кнопки
-  const cx = u * 2.4, cy = h - u * 2.6;      // центр D-pad
+  const u = Math.min(w * 0.062, h * 0.075);  // радиус кнопки
+  const cx = u * 2.1, cy = h - u * 2.3;      // центр D-pad
   return [
-    { code: 'ArrowUp',    x: cx,           y: cy - u * 1.35, r: u, label: '↑' },
-    { code: 'ArrowDown',  x: cx,           y: cy + u * 1.35, r: u, label: '↓' },
-    { code: 'ArrowLeft',  x: cx - u * 1.35, y: cy,           r: u, label: '←' },
-    { code: 'ArrowRight', x: cx + u * 1.35, y: cy,           r: u, label: '→' },
-    { code: 'Space', x: w - u * 2.2, y: h - u * 2.4, r: u * 1.5, label: 'ХОП' },
+    { code: 'ArrowUp',    x: cx,            y: cy - u * 1.15, r: u, label: '↑' },
+    { code: 'ArrowDown',  x: cx,            y: cy + u * 1.15, r: u, label: '↓' },
+    { code: 'ArrowLeft',  x: cx - u * 1.15, y: cy,            r: u, label: '←' },
+    { code: 'ArrowRight', x: cx + u * 1.15, y: cy,            r: u, label: '→' },
+    { code: 'Space', x: w - u * 1.9, y: h - u * 2.0, r: u * 1.4, label: 'ХОП' },
   ];
 }
 const touchPointers = new Map(); // pointerId → key code
@@ -549,7 +550,10 @@ function panel(ctx, x, y, w, h) {
   ctx.beginPath(); ctx.roundRect(x, y, w, h, 14); ctx.fill(); ctx.stroke();
 }
 
-const KEY_LABEL = { Space: 'ПРОБЕЛ', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+// На таче Space — это кнопка «ХОП», подсказки должны говорить её именем.
+const KEY_LABEL = IS_TOUCH
+  ? { Space: 'ХОП', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' }
+  : { Space: 'ПРОБЕЛ', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
 
 function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
@@ -561,8 +565,8 @@ function drawQte(run, m, z) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
   if (def.kind === 'rhythm') {
-    // 6 стрелок ← → с бегущей подсветкой
-    const step = 64 * z;
+    // 6 стрелок ← → с бегущей подсветкой; шаг сжимается на узких экранах
+    const step = Math.min(64 * z, (w * 0.9) / def.beats);
     for (let i = 0; i < def.beats; i++) {
       const x = cx + (i - (def.beats - 1) / 2) * step;
       const key = def.keys[i % 2];
@@ -604,12 +608,17 @@ function drawQte(run, m, z) {
     ctx.fillText('?', cx, cy - 62 * z);
   } else if (def.kind === 'press') {
     // press: тайминг-бар — палочка бежит к зоне, скорость палочки = скорость собаки.
+    // На таче клавишу в центре не дублируем — подсвечивается сама кнопка «ХОП».
     const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
     const inGood = Math.abs(t - q.target) <= q.w * 0.6;
-    const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
-    keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
-      inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
-    timingBar(ctx, run, m, q, cx, cy - 78 * z, z);
+    if (!IS_TOUCH) {
+      const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
+      keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
+        inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
+      timingBar(ctx, run, m, q, cx, cy - 78 * z, z);
+    } else {
+      timingBar(ctx, run, m, q, cx, cy, z);
+    }
   } else {
     // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
     const key = def.key;
