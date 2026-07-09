@@ -401,6 +401,16 @@ export class Renderer {
     ctx.beginPath();
     ctx.ellipse(6 * stretch, 1.5, 6 * stretch * 0.7, 4.4, 0, 0, Math.PI * 2);
     ctx.fill();
+    // Кудри пуделя: облачка по контуру тела
+    if (breed.curly) {
+      ctx.fillStyle = breed.curly;
+      for (const [px2, py2, pr] of [[-11, -4, 3], [-6, -6.2, 3.2], [0, -6.8, 3.4], [6, -6, 3],
+        [11, -4, 2.7], [-12, 2, 2.8], [12, 2, 2.5], [-3, 6, 3], [4, 6, 2.8]]) {
+        ctx.beginPath();
+        ctx.arc(px2 * stretch, py2, pr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     // Голова
     const bob = dog.airborne ? -2 : Math.sin(run * 2) * 1.2;
     ctx.fillStyle = breed.body;
@@ -445,9 +455,18 @@ export class Renderer {
       ctx.translate(12 * stretch, -8 + bob);
       ctx.rotate(-0.5 - earBack + side * 0.25);
       ctx.beginPath();
-      ctx.ellipse(0, -3, 1.9, 3.8, 0, 0, Math.PI * 2);
+      // У пуделя уши — пышные висячие «локоны»
+      if (breed.curly) ctx.ellipse(0, -2.5, 2.8, 4.4, 0, 0, Math.PI * 2);
+      else ctx.ellipse(0, -3, 1.9, 3.8, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
+    }
+    // Топ-нот пуделя: шапка кудрей на макушке
+    if (breed.curly) {
+      ctx.fillStyle = breed.curly;
+      for (const [hx2, hy2, hr] of [[13 * stretch, -9.5 + bob, 2.4], [15.5 * stretch, -10 + bob, 2.2], [11 * stretch, -8.5 + bob, 2]]) {
+        ctx.beginPath(); ctx.arc(hx2, hy2, hr, 0, Math.PI * 2); ctx.fill();
+      }
     }
     // Язык на радостях
     if (dog.happy) {

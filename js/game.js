@@ -6,6 +6,15 @@ import { computeSct } from './scoring.js';
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel']);
 
+// Обучающие подсказки: первая встреча со сложной механикой — slow-mo + инструкция.
+export const HINTS = {
+  weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО попеременно — в ритм подсветке!',
+  aframe:  'ГОРКА: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
+  dogwalk: 'БУМ: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
+  seesaw:  'КАЧЕЛИ: ВЕРХ на заходе, потом ХОП, когда доска опустится!',
+  table:   'СТОЛ: зажми ХОП и держи, пока шкала не заполнится!',
+};
+
 export class Run {
   constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1 }) {
     this.course = course;
@@ -47,6 +56,8 @@ export class Run {
     this.events = [];     // для HUD/экрана: {type,...}
     this.finishT = 0;
     this._stepAcc = 0;
+    this.hintText = null; // обучающая подсказка при первой встрече механики
+    this.hintSlow = 0;    // сек оставшегося slow-mo
   }
 
   emit(e) { this.events.push(e); }
@@ -72,6 +83,7 @@ export class Run {
   // ---------- ЦИКЛ ----------
   update(dt) {
     if (this.hitstop > 0) { this.hitstop -= dt; dt *= 0.15; }
+    if (this.hintSlow > 0) { this.hintSlow -= dt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
     this.time += this.phase === 'running' ? dt : 0;
 
     if (this.phase === 'countdown') {
@@ -114,6 +126,17 @@ export class Run {
           nm.qteStart = this.time;
           nm.startDist = d.dist;
           nm.state.active = true;
+          // Первая встреча со сложной механикой: slow-mo + инструкция
+          if (HINTS[nm.o.type]) {
+            let seen = {};
+            try { seen = JSON.parse(localStorage.getItem('agility_hints') || '{}'); } catch {}
+            if (!seen[nm.o.type]) {
+              seen[nm.o.type] = true;
+              try { localStorage.setItem('agility_hints', JSON.stringify(seen)); } catch {}
+              this.hintText = HINTS[nm.o.type];
+              this.hintSlow = 2.4;
+            }
+          }
           // PS-style обманка: только press-QTE, шанс растёт с классом.
           if (nm.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
             nm.decoys = makeDecoys(nm.qte.def.key, this.course.cls);

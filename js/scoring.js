@@ -22,6 +22,12 @@ export const BREEDS = {
     body: '#9aa3ad', chest: '#f7f5f0', ear: '#2e3238', size: 0.95,
     merle: '#3a3f46', tan: '#c98a4b', eye: '#8fd8ff', legs: '#e8e2d6',
   },
+  poodle: {
+    id: 'poodle', name: 'Той-пудель', desc: 'Кудрявый шоколадный чемпион. Широкое окно и комбо!',
+    speedMul: 0.95, windowScale: 1.15, comboRate: 1.4,
+    body: '#5d3a24', chest: '#6f4830', ear: '#4a2d1a', size: 0.68,
+    curly: '#6f4830', unlockAch: 'golden-paw',
+  },
 };
 
 export function computeSct(pathLength, cls, sctSpeed) {

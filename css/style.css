@@ -5,6 +5,11 @@ html, body {
   background: #12341d;
   height: 100%;
   font-family: "Segoe UI", system-ui, sans-serif;
+  /* iOS: долгое нажатие не должно выделять страницу и звать лупу */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #game {
@@ -13,4 +18,7 @@ html, body {
   height: 100vh;
   touch-action: none;
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }

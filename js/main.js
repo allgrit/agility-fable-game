@@ -7,6 +7,7 @@ import { Renderer } from './render.js';
 import { Run } from './game.js';
 import { QTE_DEFS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
+import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -127,6 +128,8 @@ function medalCounts() {
 }
 
 const breedList = Object.values(BREEDS);
+const breedLocked = (b) => b.unlockAch && !hasAch(b.unlockAch);
+const toasts = []; // {icon, name, desc, t}
 
 // DPR-рендер: чёткая картинка на ретине; все hit-тесты в canvas-координатах.
 const DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -163,13 +166,14 @@ function touchButtons() {
   const w = canvas.width, h = canvas.height;
   // Радиус под палец: на узких высоких экранах опираемся на ширину.
   const u = Math.max(Math.min(w * 0.095, h * 0.06), Math.min(w, h) * 0.055);
-  const cx = u * 2.3, cy = h - u * 3.6;      // центр D-pad — повыше от кромки
+  // Выше от кромки: iOS Safari-панель и жест «домой» не должны накрывать пад.
+  const cx = u * 2.3, cy = h - u * 4.6;
   return [
     { code: 'ArrowUp',    x: cx,            y: cy - u * 1.18, r: u, label: '↑', hotLabel: 'ВЕРХ' },
     { code: 'ArrowDown',  x: cx,            y: cy + u * 1.18, r: u, label: '↓', hotLabel: 'НИЗ' },
     { code: 'ArrowLeft',  x: cx - u * 1.18, y: cy,            r: u, label: '←', hotLabel: 'ЛЕВО' },
     { code: 'ArrowRight', x: cx + u * 1.18, y: cy,            r: u, label: '→', hotLabel: 'ПРАВО' },
-    { code: 'Space', x: w - u * 2.0, y: h - u * 3.2, r: u * 1.45, label: 'ХОП', hotLabel: 'ХОП' },
+    { code: 'Space', x: w - u * 2.0, y: h - u * 4.2, r: u * 1.45, label: 'ХОП', hotLabel: 'ХОП' },
   ];
 }
 const touchPointers = new Map(); // pointerId → key code
@@ -182,6 +186,18 @@ function muteZone() {
 function trophyZone() {
   const z = Math.min(canvas.width, canvas.height) / 700;
   return { x: canvas.width - 34 * z, y: 195 * z, r: 26 * z };
+}
+
+// Полноэкранный режим (недоступен на iPhone — там прячем кнопку).
+const FS_SUPPORTED = !!(document.documentElement.requestFullscreen);
+function fsZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 260 * z, r: 26 * z };
+}
+function toggleFullscreen() {
+  if (!FS_SUPPORTED) return;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
 }
 window.addEventListener('keydown', (e) => {
   if (KEYS.includes(e.code)) e.preventDefault();
@@ -208,11 +224,20 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (app.state === 'run') app.run.input(e.code, false);
 });
+// iOS: гасим системные жесты — выделение, лупу, контекстное меню, двойной тап.
+canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('gesturestart', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
   audio.ensure();
   const p = evXY(e);
   const mz = muteZone();
   if (Math.hypot(p.x - mz.x, p.y - mz.y) < mz.r) { toggleMute(); return; }
+  if (FS_SUPPORTED) {
+    const fz = fsZone();
+    if (Math.hypot(p.x - fz.x, p.y - fz.y) < fz.r) { toggleFullscreen(); return; }
+  }
   if (app.state === 'run') {
     // Магнит: тап засчитывается ближайшей кнопке в расширенной зоне —
     // промах пальца на пару миллиметров не должен глотать ввод.
@@ -277,9 +302,9 @@ function menuClick(x, y) {
     if (y < h * 0.29) menuKey('ArrowDown');
     return;
   }
-  const cardW = Math.min(230, w * 0.21);
+  const cardW = Math.min(195, w * 0.178);
   for (let i = 0; i < n; i++) {
-    const cx = w / 2 + (i - (n - 1) / 2) * (cardW + 18);
+    const cx = w / 2 + (i - (n - 1) / 2) * (cardW + 14);
     if (Math.abs(x - cx) < cardW / 2 && y > h * 0.38 && y < h * 0.72) {
       if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
       return;
@@ -314,6 +339,12 @@ function toMenu() { app.state = 'menu'; app.run = null; audio.crowdLevel(0); }
 
 function startRun() {
   const breed = breedList[app.breedIdx];
+  if (breedLocked(breed)) {
+    const a = ACHIEVEMENTS.find(x => x.id === breed.unlockAch);
+    toasts.push({ icon: '🔒', name: breed.name, desc: `Открой: ${a?.desc || ''}`, t: 0 });
+    audio.miss();
+    return;
+  }
   let course;
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
@@ -392,6 +423,26 @@ function drawHud(run) {
     ctx.strokeText(txt, w / 2, canvas.height * 0.4);
     ctx.fillStyle = '#ffd54a';
     ctx.fillText(txt, w / 2, canvas.height * 0.4);
+    ctx.restore();
+  }
+
+  // Обучающая подсказка (slow-mo при первой встрече механики)
+  if (run.hintText) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    const hy = canvas.height * 0.3;
+    // На клавиатуре подсказки говорят клавишами, на таче — именами кнопок
+    const hint = IS_TOUCH ? run.hintText
+      : run.hintText.replace('ЛЕВО и ПРАВО', '← и →').replace(/ВЕРХ/g, '↑').replace(/ХОП/g, 'ПРОБЕЛ');
+    ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+    const tw = ctx.measureText(hint).width;
+    ctx.fillStyle = 'rgba(10,18,14,0.88)';
+    ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(w / 2 - tw / 2 - 22 * z, hy - 28 * z, tw + 44 * z, 52 * z, 14 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText(hint, w / 2, hy + 6 * z);
     ctx.restore();
   }
 
@@ -514,8 +565,8 @@ function drawBoard() {
     ctx.font = `${Math.round(19 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('Пока пусто — пробеги первую трассу!', w / 2, py + ph / 2);
   } else {
-    const rows = Math.min(board.length, 10);
-    const rowH = Math.min(40 * z, (ph - 140 * z) / rows);
+    const rows = Math.min(board.length, isPortrait() ? 5 : 7);
+    const rowH = Math.min(36 * z, (ph - 280 * z) / rows);
     ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.textAlign = 'left';
@@ -538,11 +589,64 @@ function drawBoard() {
       ctx.fillText(label.length > 42 ? label.slice(0, 41) + '…' : label, px + pw * 0.55, ry);
     }
   }
+  // Достижения: сетка под таблицей
+  const ach = loadAch();
+  const cols = isPortrait() ? 2 : 5;
+  const cellW = (pw - 40 * z) / cols;
+  const startY = py + ph - 26 * z - Math.ceil(ACHIEVEMENTS.length / cols) * 34 * z - 16 * z;
+  ctx.textAlign = 'left';
+  ACHIEVEMENTS.forEach((a, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const ax = px + 24 * z + col * cellW;
+    const ay = startY + row * 34 * z;
+    const got = !!ach[a.id];
+    ctx.globalAlpha = got ? 1 : 0.35;
+    ctx.font = `${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(got ? a.icon : '🔒', ax, ay);
+    ctx.fillStyle = got ? '#ffe9a8' : 'rgba(255,255,255,0.6)';
+    ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(a.name, ax + 24 * z, ay - 4 * z);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = `${Math.round(9 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(a.desc.slice(0, 30), ax + 24 * z, ay + 8 * z);
+  });
+  ctx.globalAlpha = 1;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
   ctx.fillText('L / ESC / тап — назад', w / 2, py + ph - 26 * z);
   ctx.restore();
+}
+
+// Тосты достижений: правый нижний угол, 3.5 сек
+function drawToasts(dt) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  let y = h - 90 * z - (IS_TOUCH ? 240 * z : 0);
+  for (const t of toasts) {
+    t.t = (t.t || 0) + dt;
+    const alpha = t.t < 0.3 ? t.t / 0.3 : t.t > 3.0 ? Math.max(0, 1 - (t.t - 3.0) / 0.5) : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const tw = 250 * z;
+    ctx.fillStyle = 'rgba(16,28,20,0.92)';
+    ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(w - tw - 16 * z, y - 30 * z, tw, 58 * z, 12 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.font = `${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(t.icon, w - tw - 2 * z, y + 3 * z);
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(t.name, w - tw + 32 * z, y - 8 * z);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(t.desc.slice(0, 38), w - tw + 32 * z, y + 10 * z);
+    ctx.restore();
+    y -= 70 * z;
+  }
+  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > 3.5) toasts.splice(i, 1);
 }
 
 function drawTrophyIcon() {
@@ -569,6 +673,14 @@ function drawMuteIcon() {
   ctx.font = `${Math.round(mz.r * 1.1)}px "Segoe UI", sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(audio.muted ? '🔇' : '🔊', mz.x, mz.y + 2);
+  if (FS_SUPPORTED) {
+    const fz = fsZone();
+    ctx.fillStyle = 'rgba(10,20,15,0.55)';
+    ctx.beginPath(); ctx.arc(fz.x, fz.y, fz.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `${Math.round(fz.r * 1.0)}px "Segoe UI", sans-serif`;
+    ctx.fillText(document.fullscreenElement ? '⤢' : '⛶', fz.x, fz.y + 2);
+  }
   ctx.restore();
 }
 
@@ -773,18 +885,21 @@ function drawMenu(dt) {
       ctx.strokeStyle = sel ? '#ffd54a' : 'rgba(255,255,255,0.25)';
       ctx.lineWidth = sel ? 4 : 1.5;
       ctx.beginPath(); ctx.roundRect(cx - cardW / 2, cy, cardW, cardH, 16); ctx.fill(); ctx.stroke();
+      const locked = breedLocked(b);
       ctx.save();
+      if (locked) ctx.globalAlpha = 0.45;
       ctx.translate(cx - cardW / 2 + cardH * 0.75, cy + cardH * 0.55);
       ctx.scale(1.15, 1.15);
-      drawCardDog(ctx, { runPhase: app.t * (sel ? 8 : 3), happy: sel }, b, cardH * 0.55);
+      drawCardDog(ctx, { runPhase: app.t * (sel ? 8 : 3), happy: sel && !locked }, b, cardH * 0.55);
       ctx.restore();
       ctx.textAlign = 'left';
       ctx.fillStyle = sel ? '#ffe082' : '#fff';
       ctx.font = `bold ${Math.round(19 * z)}px "Segoe UI", sans-serif`;
-      ctx.fillText(b.name, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.42);
+      ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.42);
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
       ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
-      ctx.fillText(b.desc, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.72);
+      ctx.fillText(locked ? '5 золотых медалей откроют его' : b.desc,
+        cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.72);
       ctx.restore();
     });
     ctx.textAlign = 'center';
@@ -801,10 +916,11 @@ function drawMenu(dt) {
     ctx.restore();
     return;
   }
-  const cardW = Math.min(230, w * 0.21), cardH = h * 0.34;
+  const cardW = Math.min(195, w * 0.178), cardH = h * 0.34;
   breedList.forEach((b, i) => {
-    const cx = w / 2 + (i - (breedList.length - 1) / 2) * (cardW + 18), cy = h * 0.38;
+    const cx = w / 2 + (i - (breedList.length - 1) / 2) * (cardW + 14), cy = h * 0.38;
     const sel = i === app.breedIdx;
+    const locked = breedLocked(b);
     ctx.save();
     if (sel) { ctx.translate(cx, cy + cardH / 2); ctx.scale(1.06, 1.06); ctx.translate(-cx, -(cy + cardH / 2)); }
     ctx.fillStyle = sel ? 'rgba(30,52,40,0.92)' : 'rgba(14,26,20,0.8)';
@@ -814,8 +930,9 @@ function drawMenu(dt) {
     // Пёсик на карточке
     const dogY = cy + cardH * 0.36;
     renderer.cam.zoom = 34 * z;
-    const fake = { x: 0, y: 0, heading: -0.1, runPhase: app.t * (sel ? 8 : 3), speed: sel ? 5 : 1, happy: sel, elevation: 0 };
+    const fake = { x: 0, y: 0, heading: -0.1, runPhase: app.t * (sel ? 8 : 3), speed: sel ? 5 : 1, happy: sel && !locked, elevation: 0 };
     ctx.save();
+    if (locked) ctx.globalAlpha = 0.4;
     ctx.translate(cx, dogY);
     ctx.scale(1.6, 1.6);
     drawCardDog(ctx, fake, b, z * 34);
@@ -823,10 +940,11 @@ function drawMenu(dt) {
     ctx.textAlign = 'center';
     ctx.fillStyle = sel ? '#ffe082' : '#fff';
     ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(b.name, cx, cy + cardH * 0.62);
+    ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx, cy + cardH * 0.62);
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-    wrapText(ctx, b.desc, cx, cy + cardH * 0.72, cardW - 30, 18 * z);
+    wrapText(ctx, locked ? 'Собери 5 золотых медалей, чтобы открыть' : b.desc,
+      cx, cy + cardH * 0.72, cardW - 30, 18 * z);
     ctx.restore();
   });
 
@@ -861,8 +979,20 @@ function drawCardDog(ctx, dog, breed, zoom) {
   }
   ctx.fillStyle = breed.chest;
   ctx.beginPath(); ctx.ellipse(6, 1.5, 4.5, 4.2, 0, 0, Math.PI * 2); ctx.fill();
+  if (breed.curly) {
+    ctx.fillStyle = breed.curly;
+    for (const [px2, py2, pr] of [[-11, -4, 3], [-6, -6.2, 3.2], [0, -6.8, 3.4], [6, -6, 3], [11, -4, 2.7], [-3, 6, 3]]) {
+      ctx.beginPath(); ctx.arc(px2, py2, pr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   ctx.fillStyle = breed.body;
   ctx.beginPath(); ctx.ellipse(14, -4, 6.2, 5.4, -0.15, 0, Math.PI * 2); ctx.fill();
+  if (breed.curly) {
+    ctx.fillStyle = breed.curly;
+    for (const [hx2, hy2, hr] of [[13, -9.5, 2.4], [15.5, -10, 2.2], [11, -8.5, 2]]) {
+      ctx.beginPath(); ctx.arc(hx2, hy2, hr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   if (breed.tan) {
     ctx.fillStyle = breed.tan;
     ctx.beginPath(); ctx.ellipse(13, -1.5, 2.6, 2.0, -0.2, 0, Math.PI * 2); ctx.fill();
@@ -934,6 +1064,14 @@ function drawResults(run, z) {
     }
     app.newMedal = recordMedal(app.result.stars);
     if (app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
+    // Достижения
+    const newly = checkAchievements({
+      run, result: app.result, mode: app.mode, cls: app.cls, goldCount: medalCounts()[3],
+    });
+    for (const a of newly) {
+      toasts.push({ icon: a.icon, name: a.name, desc: a.desc, t: 0 });
+      audio.fanfare();
+    }
     if (app.result.points > app.bestPoints) {
       app.bestPoints = app.result.points;
       localStorage.setItem('agility_best', String(app.bestPoints));
@@ -1013,6 +1151,7 @@ function frame(now) {
     drawMuteIcon();
     drawTrophyIcon();
     if (app.state === 'board') drawBoard();
+    drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);
     app.run.update(dt);
@@ -1024,6 +1163,7 @@ function frame(now) {
     }
     if (app.state === 'results') drawResults(app.run, z);
     drawMuteIcon();
+    drawToasts(dt);
     for (const e of app.run.drainEvents()) {
       // события уже озвучены внутри Run; здесь место для метрик/отладки
       if (window.__agilityEvents) window.__agilityEvents.push(e);
