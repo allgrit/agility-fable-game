@@ -165,11 +165,11 @@ function touchButtons() {
   const u = Math.max(Math.min(w * 0.095, h * 0.06), Math.min(w, h) * 0.055);
   const cx = u * 2.3, cy = h - u * 3.6;      // центр D-pad — повыше от кромки
   return [
-    { code: 'ArrowUp',    x: cx,            y: cy - u * 1.18, r: u, label: '↑' },
-    { code: 'ArrowDown',  x: cx,            y: cy + u * 1.18, r: u, label: '↓' },
-    { code: 'ArrowLeft',  x: cx - u * 1.18, y: cy,            r: u, label: '←' },
-    { code: 'ArrowRight', x: cx + u * 1.18, y: cy,            r: u, label: '→' },
-    { code: 'Space', x: w - u * 2.0, y: h - u * 3.2, r: u * 1.45, label: 'ХОП' },
+    { code: 'ArrowUp',    x: cx,            y: cy - u * 1.18, r: u, label: '↑', hotLabel: 'ВЕРХ' },
+    { code: 'ArrowDown',  x: cx,            y: cy + u * 1.18, r: u, label: '↓', hotLabel: 'НИЗ' },
+    { code: 'ArrowLeft',  x: cx - u * 1.18, y: cy,            r: u, label: '←', hotLabel: 'ЛЕВО' },
+    { code: 'ArrowRight', x: cx + u * 1.18, y: cy,            r: u, label: '→', hotLabel: 'ПРАВО' },
+    { code: 'Space', x: w - u * 2.0, y: h - u * 3.2, r: u * 1.45, label: 'ХОП', hotLabel: 'ХОП' },
   ];
 }
 const touchPointers = new Map(); // pointerId → key code
@@ -422,19 +422,23 @@ function drawTouchControls(run) {
     const isHot = b.code === hot;
     const blinkHz = urgency === 2 ? 14 : urgency === 1 ? 8 : 4;
     const blinkOn = Math.sin(t * blinkHz * Math.PI) > -0.2;
+    // Ожидаемая кнопка увеличивается и показывает слово-команду вместо стрелки.
+    const r = b.r * (isHot ? 1.12 : 1);
+    const label = isHot ? b.hotLabel : b.label;
     ctx.save();
     // Плотный фон — кнопки не должны тонуть в толпе и траве.
     const flash = isHot && urgency === 2 && blinkOn;
-    ctx.fillStyle = active || flash ? 'rgba(255,213,74,0.9)' : 'rgba(8,16,12,0.88)';
+    ctx.fillStyle = active || flash ? 'rgba(255,213,74,0.9)'
+      : isHot ? 'rgba(20,34,24,0.95)' : 'rgba(8,16,12,0.88)';
     ctx.strokeStyle = isHot ? (blinkOn ? '#ffd54a' : 'rgba(255,255,255,0.5)') : 'rgba(255,255,255,0.7)';
     ctx.lineWidth = isHot && blinkOn ? 7 : 3;
     if (isHot && blinkOn) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = urgency === 2 ? 26 : 14; }
-    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = active || flash ? '#1a1a1a' : '#fff';
-    ctx.font = `900 ${Math.round(b.r * (b.label.length > 1 ? 0.48 : 0.85))}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = active || flash ? '#1a1a1a' : isHot ? '#ffd54a' : '#fff';
+    ctx.font = `900 ${Math.round(r * (label.length > 2 ? 0.4 : label.length > 1 ? 0.48 : 0.85))}px "Segoe UI", sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(b.label, b.x, b.y + 2);
+    ctx.fillText(label, b.x, b.y + 2);
     ctx.restore();
   }
 }
