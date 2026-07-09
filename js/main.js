@@ -14,10 +14,10 @@ const audio = new AudioEngine();
 const fx = new Particles();
 
 const app = {
-  state: 'menu',           // menu | run | results
+  state: 'menu',           // menu | run | results | board
   breedIdx: 0,
-  cls: 'novice',
-  seed: 1,
+  cls: localStorage.getItem('agility_class') || 'novice', // прогресс карьеры
+  seed: Number(localStorage.getItem('agility_seed') || 1),
   run: null,
   result: null,
   mode: 'career',          // career (генератор) | worldcup (реальные трассы)
@@ -25,6 +25,34 @@ const app = {
   t: 0,
   bestPoints: Number(localStorage.getItem('agility_best') || 0),
 };
+
+// ---------- ЛИДЕРБОРД (localStorage) ----------
+function loadBoard() {
+  try { return JSON.parse(localStorage.getItem('agility_board') || '[]'); }
+  catch { return []; }
+}
+function saveRunToBoard(run, res) {
+  const board = loadBoard();
+  board.push({
+    ts: Date.now(),
+    breed: run.breed.name,
+    cls: run.course.class.name,
+    course: run.course.name || `Трасса #${app.seed}`,
+    mode: app.mode,
+    time: +run.time.toFixed(2),
+    faults: res.totalFaults,
+    stars: res.stars,
+    points: res.points,
+    clean: res.clean,
+  });
+  board.sort((a, b) => b.points - a.points);
+  board.length = Math.min(board.length, 20);
+  localStorage.setItem('agility_board', JSON.stringify(board));
+}
+function saveProgress() {
+  localStorage.setItem('agility_class', app.cls);
+  localStorage.setItem('agility_seed', String(app.seed));
+}
 
 const breedList = Object.values(BREEDS);
 
@@ -76,11 +104,25 @@ function muteZone() {
   const z = Math.min(canvas.width, canvas.height) / 700;
   return { x: canvas.width - 34 * z, y: 130 * z, r: 26 * z };
 }
+
+function trophyZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 195 * z, r: 26 * z };
+}
 window.addEventListener('keydown', (e) => {
   if (KEYS.includes(e.code)) e.preventDefault();
   if (e.repeat) return;
   audio.ensure();
   if (e.code === 'KeyM') return toggleMute();
+  if (e.code === 'KeyL' && app.state !== 'run') {
+    app.state = app.state === 'board' ? 'menu' : 'board';
+    audio.click();
+    return;
+  }
+  if (app.state === 'board') {
+    if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
+    return;
+  }
   if (app.state === 'menu') return menuKey(e.code);
   if (app.state === 'results') return resultsKey(e.code);
   if (app.state === 'run') {
@@ -106,6 +148,11 @@ canvas.addEventListener('pointerdown', (e) => {
       }
     }
     return;
+  }
+  if (app.state === 'board') { app.state = 'menu'; audio.click(); return; }
+  const tz = trophyZone();
+  if (app.state === 'menu' && Math.hypot(p.x - tz.x, p.y - tz.y) < tz.r) {
+    app.state = 'board'; audio.click(); return;
   }
   if (app.state === 'menu') menuClick(p.x, p.y);
   else if (app.state === 'results') resultsKey('Enter');
@@ -166,6 +213,7 @@ function resultsKey(code) {
     if (app.mode === 'career') {
       if (app.result && app.result.qualified) app.cls = nextClass(app.cls);
       app.seed++;
+      saveProgress();
     } else {
       app.realIdx = (app.realIdx + 1) % REAL_COURSES.length;
     }
@@ -279,6 +327,71 @@ function drawTouchControls(run) {
     ctx.fillText(b.label, b.x, b.y + 2);
     ctx.restore();
   }
+}
+
+// ---------- ЭКРАН ЛИДЕРБОРДА ----------
+function drawBoard() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.82)';
+  ctx.fillRect(0, 0, w, h);
+  const board = loadBoard();
+  const pw = Math.min(640 * z, w * 0.94), ph = Math.min(560 * z, h * 0.9);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  panel(ctx, px, py, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🏆 ЛУЧШИЕ ПРОГОНЫ', w / 2, py + 44 * z);
+
+  if (!board.length) {
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font = `${Math.round(19 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('Пока пусто — пробеги первую трассу!', w / 2, py + ph / 2);
+  } else {
+    const rows = Math.min(board.length, 10);
+    const rowH = Math.min(40 * z, (ph - 140 * z) / rows);
+    ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.textAlign = 'left';
+    ctx.fillText('#  Очки', px + 24 * z, py + 78 * z);
+    ctx.fillText('Время / Фолты', px + pw * 0.32, py + 78 * z);
+    ctx.fillText('Собака · Трасса', px + pw * 0.55, py + 78 * z);
+    for (let i = 0; i < rows; i++) {
+      const e = board[i];
+      const ry = py + 100 * z + i * rowH;
+      if (i % 2 === 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.05)';
+        ctx.fillRect(px + 12 * z, ry - rowH * 0.62, pw - 24 * z, rowH * 0.9);
+      }
+      ctx.fillStyle = i === 0 ? '#ffd54a' : i < 3 ? '#ffe9a8' : '#e8f5ec';
+      ctx.font = `${i < 3 ? 'bold ' : ''}${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(`${i + 1}. ${e.points}${e.clean ? ' ★Q' : ''}`, px + 24 * z, ry);
+      ctx.fillText(`${e.time.toFixed(1)}с / ${e.faults}ф`, px + pw * 0.32, ry);
+      const label = `${e.breed} · ${e.cls} · ${e.course}`;
+      ctx.fillText(label.length > 42 ? label.slice(0, 41) + '…' : label, px + pw * 0.55, ry);
+    }
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('L / ESC / тап — назад', w / 2, py + ph - 26 * z);
+  ctx.restore();
+}
+
+function drawTrophyIcon() {
+  const ctx = renderer.ctx;
+  const tz = trophyZone();
+  ctx.save();
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = 'rgba(10,20,15,0.55)';
+  ctx.beginPath(); ctx.arc(tz.x, tz.y, tz.r, 0, Math.PI * 2); ctx.fill();
+  ctx.font = `${Math.round(tz.r * 1.05)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('🏆', tz.x, tz.y + 2);
+  ctx.restore();
 }
 
 function drawMuteIcon() {
@@ -551,7 +664,7 @@ function drawMenu(dt) {
   ctx.fillText('ENTER / клик — на старт!', w / 2, h * 0.83);
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.65)';
-  ctx.fillText('← → выбор породы · ПРОБЕЛ прыжок · ↓ туннель · ←→ слалом · ↑ горка/бум · удержания по подсказкам', w / 2, h * 0.88);
+  ctx.fillText('← → выбор породы · ПРОБЕЛ прыжок · ↓ туннель · ←→ слалом · ↑ горка/бум · L — лидерборд', w / 2, h * 0.88);
   if (app.bestPoints) {
     ctx.fillStyle = '#ffd54a';
     ctx.fillText(`Рекорд: ${app.bestPoints} очков`, w / 2, h * 0.93);
@@ -642,6 +755,7 @@ function drawResults(run, z) {
       app.bestPoints = app.result.points;
       localStorage.setItem('agility_best', String(app.bestPoints));
     }
+    saveRunToBoard(run, app.result);
   }
   const res = app.result;
   const pw = Math.min(520 * z, w * 0.9), ph = Math.min(460 * z, h * 0.85);
@@ -694,9 +808,11 @@ function frame(now) {
   last = now;
   app.t += dt;
 
-  if (app.state === 'menu') {
+  if (app.state === 'menu' || app.state === 'board') {
     drawMenu(dt);
     drawMuteIcon();
+    drawTrophyIcon();
+    if (app.state === 'board') drawBoard();
   } else if (app.run) {
     renderer.begin(dt);
     app.run.update(dt);
