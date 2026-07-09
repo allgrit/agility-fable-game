@@ -290,7 +290,7 @@ function menuClick(x, y) {
   const w = canvas.width, h = canvas.height;
   const n = breedList.length;
   if (isPortrait()) {
-    const top = h * 0.33, cardH = h * 0.1, gap = h * 0.014;
+    const top = h * 0.325, cardH = h * 0.088, gap = h * 0.01;
     for (let i = 0; i < n; i++) {
       const cy = top + i * (cardH + gap);
       if (y > cy && y < cy + cardH && Math.abs(x - w / 2) < w * 0.44) {
@@ -298,7 +298,7 @@ function menuClick(x, y) {
         return;
       }
     }
-    if (y > h * 0.8) startRun();
+    if (y > h * 0.82) startRun();
     if (y < h * 0.29) menuKey('ArrowDown');
     return;
   }
@@ -830,6 +830,7 @@ function gaugeBar(ctx, cx, cy, bw, p, color, caption, z) {
 // ---------- МЕНЮ ----------
 function drawMenu(dt) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  if (window.__layoutDebug) window.__layoutDebug.cards = [];
   app.t += dt;
   // Фон: размытое поле
   renderer.cam.x = 26 + Math.sin(app.t * 0.1) * 6;
@@ -891,7 +892,7 @@ function drawMenu(dt) {
 
   // Карточки пород
   if (isPortrait()) {
-    const top = h * 0.33, cardH = h * 0.1, gap = h * 0.014, cardW = w * 0.88;
+    const top = h * 0.325, cardH = h * 0.088, gap = h * 0.01, cardW = w * 0.88;
     breedList.forEach((b, i) => {
       const cy = top + i * (cardH + gap), cx = w / 2;
       const sel = i === app.breedIdx;
@@ -913,13 +914,18 @@ function drawMenu(dt) {
       ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.42);
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
       ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
-      ctx.fillText(locked ? '5 золотых медалей откроют его' : b.desc,
+      ctx.fillText(locked ? 'Открой: 5 золотых 🥇' : b.desc,
         cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.72);
+      if (window.__layoutDebug) {
+        window.__layoutDebug.cards.push({ x: cx - cardW / 2, y: cy, w: cardW, h: cardH,
+          descBottom: cy + cardH * 0.72 + 13 * z, locked, sel });
+      }
       ctx.restore();
     });
     ctx.textAlign = 'center';
     ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
+    if (window.__layoutDebug) window.__layoutDebug.startTextY = h * 0.84 - 22 * z;
     ctx.fillText('ТАП ПО СОБАКЕ — НА СТАРТ!', w / 2, h * 0.84);
     ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = 'rgba(255,255,255,0.65)';
@@ -958,10 +964,14 @@ function drawMenu(dt) {
     ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx, cy + cardH * 0.62);
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-    wrapText(ctx, locked ? 'Собери 5 золотых медалей, чтобы открыть' : b.desc,
-      cx, cy + cardH * 0.72, cardW - 30, 18 * z);
+    const descBottom = wrapText(ctx, locked ? 'Открой: 5 золотых 🥇' : b.desc,
+      cx, cy + cardH * 0.72, cardW - 30, 17 * z, 3);
+    if (window.__layoutDebug) {
+      window.__layoutDebug.cards.push({ x: cx - cardW / 2, y: cy, w: cardW, h: cardH, descBottom, locked, sel });
+    }
     ctx.restore();
   });
+  if (window.__layoutDebug) window.__layoutDebug.startTextY = h * 0.83 - 24 * z;
 
   ctx.font = `bold ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
@@ -1047,16 +1057,18 @@ function drawCardDog(ctx, dog, breed, zoom) {
   ctx.restore();
 }
 
-function wrapText(ctx, text, x, y, maxW, lh) {
+function wrapText(ctx, text, x, y, maxW, lh, maxLines = 99) {
   const words = text.split(' ');
-  let line = '', yy = y;
+  let line = '', yy = y, count = 1;
   for (const wd of words) {
     if (ctx.measureText(line + wd).width > maxW && line) {
       ctx.fillText(line.trim(), x, yy); line = ''; yy += lh;
+      if (++count > maxLines) return yy;
     }
     line += wd + ' ';
   }
   ctx.fillText(line.trim(), x, yy);
+  return yy + lh;
 }
 
 // ---------- РЕЗУЛЬТАТЫ ----------

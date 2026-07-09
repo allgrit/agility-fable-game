@@ -161,6 +161,51 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   check('строгий судья: дисквалификация после 3 отказов',
     r4.phase === 'finished' && (r4.eliminated ? r4.refusals >= 3 : true), JSON.stringify(r4));
 
+  // Layout меню: карточки в экране, описания не наезжают на «на старт!»
+  const layout = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.app.state = 'menu';
+    window.__layoutDebug = { cards: [] };
+    await new Promise(r => setTimeout(r, 400));
+    const c = document.getElementById('game');
+    const L = window.__layoutDebug;
+    return {
+      n: L.cards.length,
+      inCanvas: L.cards.every(k => k.x >= 0 && k.x + k.w <= c.width && k.y >= 0),
+      descInside: L.cards.every(k => k.descBottom <= k.y + k.h + 2),
+      aboveStart: L.startTextY ? L.cards.every(k => k.descBottom < L.startTextY - 4) : true,
+    };
+  })()`);
+  check('меню: 5 карточек в границах экрана', layout.n === 5 && layout.inCanvas, JSON.stringify(layout));
+  check('меню: описания внутри карточек', layout.descInside, JSON.stringify(layout));
+  check('меню: карточки не наезжают на «на старт!»', layout.aboveStart, JSON.stringify(layout));
+
+  // Тап по запертому пуделю: выбирает его (не стартует чужим псом), второй тап — блок
+  const poodle = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.app.breedIdx = 0; A.app.state = 'menu';
+    window.__layoutDebug = { cards: [] };
+    await new Promise(r => setTimeout(r, 300));
+    const card = window.__layoutDebug.cards[4];
+    if (!card || !card.locked) return { error: 'нет запертой карточки' };
+    const c = document.getElementById('game');
+    const rect = c.getBoundingClientRect();
+    const dpr = c.width / rect.width;
+    // Тап в НИЖНЮЮ часть карточки (где раньше текст вылезал в зону старта)
+    const tapAt = (yy) => c.dispatchEvent(new PointerEvent('pointerdown', {
+      clientX: (card.x + card.w / 2) / dpr, clientY: yy / dpr, pointerId: 777, bubbles: true }));
+    tapAt(card.y + card.h * 0.9);
+    await new Promise(r => setTimeout(r, 150));
+    const afterFirst = { state: A.app.state, breedIdx: A.app.breedIdx };
+    tapAt(card.y + card.h * 0.5); // второй тап по выбранному запертому — должен блокироваться
+    await new Promise(r => setTimeout(r, 150));
+    return { afterFirst, afterSecond: { state: A.app.state, breedIdx: A.app.breedIdx } };
+  })()`);
+  check('тап по запертому пуделю выбирает его, а не стартует',
+    poodle.afterFirst?.state === 'menu' && poodle.afterFirst?.breedIdx === 4, JSON.stringify(poodle));
+  check('старт запертым пуделем заблокирован',
+    poodle.afterSecond?.state === 'menu', JSON.stringify(poodle));
+
   check('консоль без ошибок (десктоп)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
 }
@@ -264,6 +309,23 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   })()`);
   check('тач-прогон Novice чистый (реальные pointer-события)',
     touchRun.faults === 0 && touchRun.perfects === touchRun.total, JSON.stringify(touchRun));
+
+  // Layout портретного меню: карточки в экране и над строкой «на старт»
+  const pLayout = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.app.state = 'menu';
+    window.__layoutDebug = { cards: [] };
+    await new Promise(r => setTimeout(r, 400));
+    const c = document.getElementById('game');
+    const L = window.__layoutDebug;
+    return {
+      n: L.cards.length,
+      inCanvas: L.cards.every(k => k.x >= 0 && k.x + k.w <= c.width && k.y + k.h <= c.height),
+      aboveStart: L.startTextY ? L.cards.every(k => k.y + k.h < L.startTextY) : true,
+    };
+  })()`);
+  check('портретное меню: карточки в экране, над «на старт»',
+    pLayout.n === 5 && pLayout.inCanvas && pLayout.aboveStart, JSON.stringify(pLayout));
 
   check('консоль без ошибок (мобильный)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
