@@ -362,7 +362,7 @@ function drawQte(run, m, z) {
     const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
     keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
       inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
-    timingBar(ctx, run, q, t, cx, cy - 78 * z, z);
+    timingBar(ctx, run, m, q, cx, cy - 78 * z, z);
   } else {
     // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
     const key = def.key;
@@ -375,31 +375,35 @@ function drawQte(run, m, z) {
   ctx.restore();
 }
 
-// Тайминг-бар: палочка движется слева направо, попади в зону в момент нажатия.
-// px/сек растёт со скоростью собаки; ширина зоны = тайминг-окно (класс × порода).
-function timingBar(ctx, run, q, t, cx, cy, z) {
-  const total = q.target + q.w;               // сек: конец шкалы
-  const pxPerSec = (120 + run.dog.speed * 34) * z;
-  const barW = Math.min(total * pxPerSec, canvas.width * 0.8);
-  const scale = barW / total;                 // фактический px/сек после клампа
+// Тайминг-бар: палочка = позиция собаки на подлёте к точке отталкивания.
+// Скорость палочки — реальная скорость собаки; ширина зоны = окно × скорость.
+const TAKEOFF_UI = 1.3; // м до снаряда, синхронно с game.js TAKEOFF
+function timingBar(ctx, run, m, q, cx, cy, z) {
+  const takeoffD = m.entryD - TAKEOFF_UI;
+  const startD = m.startDist ?? takeoffD - 5;
+  const totalDist = Math.max(0.8, takeoffD - startD);
+  const p = (run.dog.dist - startD) / totalDist;   // 1.0 = точка отталкивания
+  const v = Math.max(run.dog.speed, 0.5);
+  const barW = Math.min(340 * z * (0.8 + v * 0.06), canvas.width * 0.8);
   const x0 = cx - barW / 2, barH = 20 * z;
+  const targetX = x0 + barW * 0.78;                // цель на 78% — виден перелёт
+  const pxPerFrac = barW * 0.78;
   ctx.save();
-  // Подложка
   ctx.fillStyle = 'rgba(12,20,16,0.78)';
   ctx.strokeStyle = 'rgba(255,255,255,0.4)';
   ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.roundRect(x0 - 5, cy - barH / 2 - 5, barW + 10, barH + 10, 9 * z);
   ctx.fill(); ctx.stroke();
-  // Зоны good (зелёная) и perfect (жёлтое ядро)
-  const zc = x0 + q.target * scale;
-  const goodW = q.w * 0.6 * scale, perfW = q.w * 0.28 * scale;
+  // Зоны в долях дистанции: good (зелёная) и perfect (жёлтое ядро)
+  const goodW = (q.w * 0.6 * v / totalDist) * pxPerFrac;
+  const perfW = (q.w * 0.28 * v / totalDist) * pxPerFrac;
   ctx.fillStyle = 'rgba(105,240,174,0.45)';
-  ctx.fillRect(zc - goodW, cy - barH / 2, goodW * 2, barH);
+  ctx.fillRect(targetX - goodW, cy - barH / 2, goodW * 2, barH);
   ctx.fillStyle = '#ffd54a';
-  ctx.fillRect(zc - perfW, cy - barH / 2, perfW * 2, barH);
-  // Палочка
-  const px = x0 + Math.min(t, total) * scale;
-  const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
+  ctx.fillRect(targetX - perfW, cy - barH / 2, perfW * 2, barH);
+  // Палочка-собака
+  const px = Math.min(x0 + barW, x0 + p * pxPerFrac);
+  const inPerfect = Math.abs(run.dog.dist - takeoffD) <= q.w * 0.28 * v;
   ctx.fillStyle = '#fff';
   ctx.shadowColor = inPerfect ? '#ffd54a' : 'rgba(0,0,0,0.6)';
   ctx.shadowBlur = inPerfect ? 10 * z : 4 * z;

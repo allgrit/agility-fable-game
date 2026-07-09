@@ -3,7 +3,7 @@ import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE } from './qte.js';
 import { computeSct } from './scoring.js';
 
-const APPROACH = 4.2;   // м до входа в снаряд, когда звучит команда
+const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel']);
 
 export class Run {
@@ -97,28 +97,41 @@ export class Run {
   _updateRunning(dt) {
     const d = this.dog;
 
-    // Активация QTE следующего снаряда
+    // Активация QTE следующего снаряда: дистанция подобрана так, чтобы в момент
+    // идеального нажатия (target) собака была в точке отталкивания ДО снаряда.
     if (this.activeIdx < 0) {
       const next = this.marks.findIndex(m => !m.resolved);
-      if (next >= 0 && d.dist >= this.marks[next].entryD - APPROACH) {
-        this.activeIdx = next;
-        const m = this.marks[next];
-        m.qte = new Qte(m.o.type, { windowScale: this.breed.windowScale });
-        m.qteStart = this.time;
-        m.state.active = true;
-        // PS-style обманка: только press-QTE, шанс растёт с классом.
-        if (m.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
-          m.decoys = makeDecoys(m.qte.def.key, this.course.cls);
-          m.decoys.revealAt = m.qte.target - m.decoys.reveal;
+      if (next >= 0) {
+        const nm = this.marks[next];
+        const lead = QTE_DEFS[nm.o.type].lead;
+        const v = Math.max(d.speed, this.baseSpeed() * 0.6);
+        if (d.dist >= nm.entryD - TAKEOFF - lead * v) {
+          this.activeIdx = next;
+          nm.qte = new Qte(nm.o.type, { windowScale: this.breed.windowScale });
+          nm.qteStart = this.time;
+          nm.startDist = d.dist;
+          nm.state.active = true;
+          // PS-style обманка: только press-QTE, шанс растёт с классом.
+          if (nm.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
+            nm.decoys = makeDecoys(nm.qte.def.key, this.course.cls);
+            nm.decoys.revealAt = nm.qte.target - nm.decoys.reveal;
+          }
         }
       }
     }
 
     const m = this.activeMark;
     if (m && m.qte) {
+      // Дрейф цели press-QTE: target всегда = момент прибытия собаки в точку
+      // отталкивания при её ТЕКУЩЕЙ скорости — визуал и физика не расходятся.
+      if (m.qte.def.kind === 'press' && m.qte.state === 'active') {
+        const eta = (m.entryD - TAKEOFF - d.dist) / Math.max(d.speed, 0.5);
+        if (eta > 0) m.qte.target = (this.time - m.qteStart) + eta;
+      }
       const evs = m.qte.update(this.time - m.qteStart);
       this._handleQteEvents(m, evs);
-      if (m.decoys && !m.decoys.revealed && this.time - m.qteStart >= m.decoys.revealAt) {
+      if (m.decoys && !m.decoys.revealed
+          && this.time - m.qteStart >= m.qte.target - m.decoys.reveal) {
         m.decoys.revealed = true;
         this.audio.reveal();
       }
@@ -267,7 +280,8 @@ export class Run {
   }
 
   _jumpArc(m) {
-    this._jump = { from: m.entryD - 0.6, to: m.exitD + 1.0, peak: m.o.type === 'tire' ? 1.0 : 0.8 };
+    // Дуга начинается с точки отталкивания — там, где собака была в момент команды.
+    this._jump = { from: m.entryD - TAKEOFF, to: m.exitD + 1.0, peak: m.o.type === 'tire' ? 1.0 : 0.8 };
   }
 
   // ---------- ПОЗА СОБАКИ ----------
