@@ -362,7 +362,7 @@ export class Renderer {
     const stretch = dog.airborne ? 1.25 : 1 + Math.sin(run * 2) * 0.06 * speedK;
 
     // Ноги
-    ctx.strokeStyle = breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+    ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
     const legPairs = [[-8, 0], [-8, Math.PI], [8, Math.PI * 0.9], [8, Math.PI * 1.9]];
     for (const [lx, ph] of legPairs) {
       const swing = dog.airborne ? (lx > 0 ? -0.9 : 0.9) : Math.sin(run + ph) * 0.9 * speedK;
@@ -382,6 +382,20 @@ export class Renderer {
     ctx.beginPath();
     ctx.ellipse(0, 0, 13 * stretch, 6.5 / Math.sqrt(stretch), 0, 0, Math.PI * 2);
     ctx.fill();
+    // Мерль-пятна (аусси): тёмные кляксы, обрезанные по телу
+    if (breed.merle) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 13 * stretch, 6.5 / Math.sqrt(stretch), 0, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = breed.merle;
+      for (const [sx, sy, sr] of [[-7, -2.5, 2.6], [-1.5, 2, 2.1], [4, -3.5, 1.9], [-10.5, 1.5, 1.8], [8.5, 1.5, 1.5]]) {
+        ctx.beginPath();
+        ctx.ellipse(sx * stretch, sy, sr, sr * 0.75, 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
     // Грудь/воротник
     ctx.fillStyle = breed.chest;
     ctx.beginPath();
@@ -393,6 +407,21 @@ export class Renderer {
     ctx.beginPath();
     ctx.ellipse(14 * stretch, -4 + bob, 6.2, 5.4, -0.15, 0, Math.PI * 2);
     ctx.fill();
+    // Медные подпалины на щеке и брови (аусси)
+    if (breed.tan) {
+      ctx.fillStyle = breed.tan;
+      ctx.beginPath();
+      ctx.ellipse(13 * stretch, -1.5 + bob, 2.6, 2.0, -0.2, 0, Math.PI * 2); ctx.fill(); // щека
+      ctx.beginPath();
+      ctx.ellipse(15.2 * stretch, -7.6 + bob, 1.2, 0.8, -0.2, 0, Math.PI * 2); ctx.fill(); // бровь
+    }
+    // Белая проточина по центру морды (аусси)
+    if (breed.merle) {
+      ctx.fillStyle = breed.chest;
+      ctx.beginPath();
+      ctx.ellipse(16.5 * stretch, -5.2 + bob, 2.6, 1.5, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     // Морда
     ctx.fillStyle = breed.chest;
     ctx.beginPath();
@@ -400,7 +429,14 @@ export class Renderer {
     ctx.fill();
     ctx.fillStyle = '#222';
     ctx.beginPath(); ctx.arc(21 * stretch, -3 + bob, 1.3, 0, Math.PI * 2); ctx.fill(); // нос
-    ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.1, 0, Math.PI * 2); ctx.fill(); // глаз
+    if (breed.eye) { // голубой глаз с зрачком
+      ctx.fillStyle = breed.eye;
+      ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.35, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(15.7 * stretch, -5.5 + bob, 0.65, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.1, 0, Math.PI * 2); ctx.fill(); // глаз
+    }
     // Уши (реагируют на скорость/полёт)
     const earBack = dog.airborne ? 0.8 : speedK * 0.5;
     ctx.fillStyle = breed.ear;

@@ -127,29 +127,31 @@ function menuKey(code) {
     app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click();
   }
   if (code === 'Enter' || code === 'Space') startRun();
-  if (code === 'Digit1') { app.breedIdx = 0; audio.click(); }
-  if (code === 'Digit2') { app.breedIdx = 1; audio.click(); }
-  if (code === 'Digit3') { app.breedIdx = 2; audio.click(); }
+  if (code.startsWith('Digit')) {
+    const n = +code.slice(5) - 1;
+    if (n >= 0 && n < breedList.length) { app.breedIdx = n; audio.click(); }
+  }
 }
 
 function menuClick(x, y) {
   const w = canvas.width, h = canvas.height;
+  const n = breedList.length;
   if (isPortrait()) {
-    const top = h * 0.34, cardH = h * 0.115, gap = h * 0.015;
-    for (let i = 0; i < 3; i++) {
+    const top = h * 0.33, cardH = h * 0.1, gap = h * 0.014;
+    for (let i = 0; i < n; i++) {
       const cy = top + i * (cardH + gap);
       if (y > cy && y < cy + cardH && Math.abs(x - w / 2) < w * 0.44) {
         if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
         return;
       }
     }
-    if (y > h * 0.78) startRun();
-    if (y < h * 0.3) { app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click(); }
+    if (y > h * 0.8) startRun();
+    if (y < h * 0.29) { app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click(); }
     return;
   }
-  const cardW = Math.min(260, w * 0.27);
-  for (let i = 0; i < 3; i++) {
-    const cx = w / 2 + (i - 1) * (cardW + 20);
+  const cardW = Math.min(230, w * 0.21);
+  for (let i = 0; i < n; i++) {
+    const cx = w / 2 + (i - (n - 1) / 2) * (cardW + 18);
     if (Math.abs(x - cx) < cardW / 2 && y > h * 0.38 && y < h * 0.72) {
       if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
       return;
@@ -474,7 +476,7 @@ function drawMenu(dt) {
 
   // Карточки пород
   if (isPortrait()) {
-    const top = h * 0.34, cardH = h * 0.115, gap = h * 0.015, cardW = w * 0.88;
+    const top = h * 0.33, cardH = h * 0.1, gap = h * 0.014, cardW = w * 0.88;
     breedList.forEach((b, i) => {
       const cy = top + i * (cardH + gap), cx = w / 2;
       const sel = i === app.breedIdx;
@@ -511,9 +513,9 @@ function drawMenu(dt) {
     ctx.restore();
     return;
   }
-  const cardW = Math.min(260, w * 0.27), cardH = h * 0.34;
+  const cardW = Math.min(230, w * 0.21), cardH = h * 0.34;
   breedList.forEach((b, i) => {
-    const cx = w / 2 + (i - 1) * (cardW + 20), cy = h * 0.38;
+    const cx = w / 2 + (i - (breedList.length - 1) / 2) * (cardW + 18), cy = h * 0.38;
     const sel = i === app.breedIdx;
     ctx.save();
     if (sel) { ctx.translate(cx, cy + cardH / 2); ctx.scale(1.06, 1.06); ctx.translate(-cx, -(cy + cardH / 2)); }
@@ -560,22 +562,47 @@ function drawCardDog(ctx, dog, breed, zoom) {
   ctx.scale(zoom / 24, zoom / 24);
   ctx.fillStyle = breed.body;
   ctx.beginPath(); ctx.ellipse(0, 0, 13, 6.5, 0, 0, Math.PI * 2); ctx.fill();
+  if (breed.merle) {
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(0, 0, 13, 6.5, 0, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = breed.merle;
+    for (const [sx, sy, sr] of [[-7, -2.5, 2.6], [-1.5, 2, 2.1], [4, -3.5, 1.9], [-10.5, 1.5, 1.8]]) {
+      ctx.beginPath(); ctx.ellipse(sx, sy, sr, sr * 0.75, 0.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
   ctx.fillStyle = breed.chest;
   ctx.beginPath(); ctx.ellipse(6, 1.5, 4.5, 4.2, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = breed.body;
   ctx.beginPath(); ctx.ellipse(14, -4, 6.2, 5.4, -0.15, 0, Math.PI * 2); ctx.fill();
+  if (breed.tan) {
+    ctx.fillStyle = breed.tan;
+    ctx.beginPath(); ctx.ellipse(13, -1.5, 2.6, 2.0, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(15.2, -7.6, 1.2, 0.8, -0.2, 0, Math.PI * 2); ctx.fill();
+  }
+  if (breed.merle) {
+    ctx.fillStyle = breed.chest;
+    ctx.beginPath(); ctx.ellipse(16.5, -5.2, 2.6, 1.5, -0.5, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.fillStyle = breed.chest;
   ctx.beginPath(); ctx.ellipse(18.5, -2.5, 3.4, 2.6, -0.1, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#222';
   ctx.beginPath(); ctx.arc(21, -3, 1.3, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(15.5, -5.5, 1.1, 0, Math.PI * 2); ctx.fill();
+  if (breed.eye) {
+    ctx.fillStyle = breed.eye;
+    ctx.beginPath(); ctx.arc(15.5, -5.5, 1.35, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(15.7, -5.5, 0.65, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(15.5, -5.5, 1.1, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.fillStyle = breed.ear;
   for (const side of [-1, 1]) {
     ctx.save(); ctx.translate(12, -8); ctx.rotate(-0.6 + side * 0.25);
     ctx.beginPath(); ctx.ellipse(0, -3, 1.9, 3.8, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
   }
   const run = dog.runPhase;
-  ctx.strokeStyle = breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+  ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
   for (const [lx, ph] of [[-8, 0], [-8, Math.PI], [8, Math.PI * 0.9], [8, Math.PI * 1.9]]) {
     const sw = Math.sin(run + ph) * 0.8;
     ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + Math.sin(sw) * 7, 10); ctx.stroke();

@@ -16,6 +16,12 @@ export const BREEDS = {
     speedMul: 0.9, windowScale: 1.0, comboRate: 1.6,
     body: '#f2ece0', chest: '#ffffff', ear: '#c07830', size: 0.7,
   },
+  aussie: {
+    id: 'aussie', name: 'Аусси', desc: 'Голубоглазый универсал блю-мерль. Быстрый и стабильный.',
+    speedMul: 1.08, windowScale: 1.05, comboRate: 1.15,
+    body: '#9aa3ad', chest: '#f7f5f0', ear: '#2e3238', size: 0.95,
+    merle: '#3a3f46', tan: '#c98a4b', eye: '#8fd8ff', legs: '#e8e2d6',
+  },
 };
 
 export function computeSct(pathLength, cls, sctSpeed) {
