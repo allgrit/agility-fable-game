@@ -13,18 +13,24 @@ const renderer = new Renderer(canvas);
 const audio = new AudioEngine();
 const fx = new Particles();
 
+const STAGES = 5; // трасс в каждом классе карьеры
+
 const app = {
   state: 'menu',           // menu | run | results | board
   breedIdx: 0,
   cls: localStorage.getItem('agility_class') || 'novice', // прогресс карьеры
-  seed: Number(localStorage.getItem('agility_seed') || 1),
+  stage: Number(localStorage.getItem('agility_stage') || 1), // 1..STAGES
   run: null,
   result: null,
-  mode: 'career',          // career (генератор) | worldcup (реальные трассы)
+  mode: 'career',          // career | worldcup (реальные трассы) | daily (трасса дня)
   realIdx: 0,
   t: 0,
   bestPoints: Number(localStorage.getItem('agility_best') || 0),
 };
+
+function careerSeed(cls, stage) {
+  return (CLASS_ORDER.indexOf(cls) + 1) * 1000 + stage * 37 + 11;
+}
 
 // ---------- ЛИДЕРБОРД (localStorage) ----------
 function loadBoard() {
@@ -37,7 +43,7 @@ function saveRunToBoard(run, res) {
     ts: Date.now(),
     breed: run.breed.name,
     cls: run.course.class.name,
-    course: run.course.name || `Трасса #${app.seed}`,
+    course: run.course.name || 'Трасса',
     mode: app.mode,
     time: +run.time.toFixed(2),
     faults: res.totalFaults,
@@ -51,7 +57,73 @@ function saveRunToBoard(run, res) {
 }
 function saveProgress() {
   localStorage.setItem('agility_class', app.cls);
-  localStorage.setItem('agility_seed', String(app.seed));
+  localStorage.setItem('agility_stage', String(app.stage));
+}
+
+// ---------- МОДИФИКАТОРЫ-ИСПЫТАНИЯ (трасса дня) ----------
+const MODIFIERS = {
+  none:   { name: '', mult: 1 },
+  rain:   { name: '🌧 Дождь — окна реакции уже', mult: 1.3, windowMul: 0.85 },
+  dusk:   { name: '🌆 Сумерки — зона видна в последний момент', mult: 1.4 },
+  strict: { name: '⚖ Строгий судья — 3 отказа = дисквалификация', mult: 1.5 },
+};
+function dailyModifier() {
+  return ['none', 'rain', 'dusk', 'strict'][Math.floor(todayNum() / 3) % 4];
+}
+function activeModifier() {
+  return app.mode === 'daily' ? dailyModifier() : 'none';
+}
+
+// ---------- ТРАССА ДНЯ ----------
+function todayStr() {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+function todayNum() {
+  const d = new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+function dailyCls() { return ['open', 'excellent', 'masters'][todayNum() % 3]; }
+function dailyBest() {
+  try {
+    const b = JSON.parse(localStorage.getItem('agility_daily') || 'null');
+    return b && b.date === todayStr() ? b.points : null;
+  } catch { return null; }
+}
+function saveDailyBest(points) {
+  const cur = dailyBest();
+  if (cur == null || points > cur) {
+    localStorage.setItem('agility_daily', JSON.stringify({ date: todayStr(), points }));
+    return true;
+  }
+  return false;
+}
+
+// ---------- МЕДАЛИ (лучшие звёзды за трассу) ----------
+const MEDAL_ICON = { 3: '🥇', 2: '🥈', 1: '🥉' };
+function loadMedals() {
+  try { return JSON.parse(localStorage.getItem('agility_medals') || '{}'); }
+  catch { return {}; }
+}
+function courseKey() {
+  if (app.mode === 'daily') return `d:${todayStr()}`;
+  if (app.mode === 'worldcup') return `w:${app.realIdx % REAL_COURSES.length}`;
+  return `c:${app.cls}:${app.stage}`;
+}
+function recordMedal(stars) {
+  if (stars < 1) return false;
+  const m = loadMedals();
+  const key = courseKey();
+  if ((m[key] || 0) >= stars) return false;
+  m[key] = stars;
+  localStorage.setItem('agility_medals', JSON.stringify(m));
+  return true;
+}
+function medalCounts() {
+  const m = loadMedals();
+  const c = { 3: 0, 2: 0, 1: 0 };
+  for (const v of Object.values(m)) if (c[v] !== undefined) c[v]++;
+  return c;
 }
 
 const breedList = Object.values(BREEDS);
@@ -171,7 +243,10 @@ function menuKey(code) {
   if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); }
   if (code === 'ArrowRight') { app.breedIdx = (app.breedIdx + 1) % breedList.length; audio.click(); }
   if (code === 'ArrowUp' || code === 'ArrowDown') {
-    app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click();
+    const modes = ['career', 'worldcup', 'daily'];
+    const dir = code === 'ArrowUp' ? -1 : 1;
+    app.mode = modes[(modes.indexOf(app.mode) + dir + modes.length) % modes.length];
+    audio.click();
   }
   if (code === 'Enter' || code === 'Space') startRun();
   if (code.startsWith('Digit')) {
@@ -193,7 +268,7 @@ function menuClick(x, y) {
       }
     }
     if (y > h * 0.8) startRun();
-    if (y < h * 0.29) { app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click(); }
+    if (y < h * 0.29) menuKey('ArrowDown');
     return;
   }
   const cardW = Math.min(230, w * 0.21);
@@ -205,16 +280,22 @@ function menuClick(x, y) {
     }
   }
   if (y > h * 0.76) startRun();
-  if (y < h * 0.3) { app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click(); }
+  if (y < h * 0.3) menuKey('ArrowDown');
 }
 
 function resultsKey(code) {
   if (code === 'Enter' || code === 'Space') {
     if (app.mode === 'career') {
-      if (app.result && app.result.qualified) app.cls = nextClass(app.cls);
-      app.seed++;
-      saveProgress();
-    } else {
+      if (app.result && app.result.qualified) {
+        app.stage++;
+        if (app.stage > STAGES) {
+          if (app.cls !== 'masters') { app.cls = nextClass(app.cls); app.stage = 1; }
+          else app.stage = STAGES; // карьера пройдена — фармим медали Masters
+        }
+        saveProgress();
+      }
+      // не квалифицировались — та же трасса ещё раз
+    } else if (app.mode === 'worldcup') {
       app.realIdx = (app.realIdx + 1) % REAL_COURSES.length;
     }
     startRun();
@@ -230,10 +311,16 @@ function startRun() {
   let course;
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
+  } else if (app.mode === 'daily') {
+    course = generateCourse(todayNum() * 13 + 7, dailyCls());
+    course.name = `Трасса дня ${todayStr()}`;
   } else {
-    course = generateCourse(app.seed * 7919 + CLASS_ORDER.indexOf(app.cls) * 131, app.cls);
+    course = generateCourse(careerSeed(app.cls, app.stage), app.cls);
+    course.name = `${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   }
-  app.run = new Run({ course, breed, audio, particles: fx, renderer });
+  const mod = MODIFIERS[activeModifier()];
+  app.run = new Run({ course, breed, audio, particles: fx, renderer,
+    modifier: activeModifier(), windowMul: mod.windowMul || 1 });
   renderer.cam.x = course.start.x;
   renderer.cam.y = course.start.y;
   app.state = 'run';
@@ -275,8 +362,13 @@ function drawHud(run) {
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.75)';
   ctx.textAlign = 'center';
-  const cname = run.course.name || `${run.course.class.name} · трасса #${app.seed}`;
+  const cname = run.course.name || run.course.class.name;
+  const modName = MODIFIERS[run.modifier]?.name;
   ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, (isPortrait() ? 118 : 22) * z);
+  if (modName) {
+    ctx.fillStyle = '#ffab6b';
+    ctx.fillText(modName, w / 2, (isPortrait() ? 140 : 44) * z);
+  }
   ctx.restore();
 
   // Отсчёт
@@ -327,6 +419,48 @@ function drawTouchControls(run) {
     ctx.fillText(b.label, b.x, b.y + 2);
     ctx.restore();
   }
+}
+
+// ---------- КАРТА КАРЬЕРЫ ----------
+// 4 класса × 5 трасс: медаль = пройдена, номер = впереди, ▶ = текущая позиция.
+function drawCareerMap(ctx, cx, y, z, portrait) {
+  const medals = loadMedals();
+  const curClsIdx = CLASS_ORDER.indexOf(app.cls);
+  // В портрете — только строка текущего класса, в landscape — все 4 в 2 колонки.
+  const classes = portrait ? [app.cls] : CLASS_ORDER;
+  const cellW = 300 * z;
+  const rowH = 19 * z;
+  ctx.save();
+  ctx.font = `${Math.round(portrait ? 13 * z : 14 * z)}px "Segoe UI", sans-serif`;
+  classes.forEach((cls, i) => {
+    const ci = CLASS_ORDER.indexOf(cls);
+    const col = portrait ? 0 : i % 2, row = portrait ? 0 : Math.floor(i / 2);
+    const rx = portrait ? cx - 110 * z : cx - cellW + col * cellW + 16 * z;
+    const ry = y + row * rowH;
+    const locked = ci > curClsIdx;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = locked ? 'rgba(255,255,255,0.35)' : ci === curClsIdx ? '#ffe082' : 'rgba(255,255,255,0.85)';
+    ctx.fillText(CLASSES[cls].name.padEnd(9), rx, ry);
+    for (let s = 1; s <= STAGES; s++) {
+      const sx = rx + (86 + (s - 1) * 26) * z;
+      const stars = medals[`c:${cls}:${s}`] || 0;
+      const isCur = ci === curClsIdx && s === app.stage;
+      if (isCur) {
+        ctx.fillStyle = '#ffd54a';
+        const pulse = 1 + Math.sin(app.t * 5) * 0.15;
+        ctx.font = `bold ${Math.round((portrait ? 13 : 15) * z * pulse)}px "Segoe UI", sans-serif`;
+        ctx.fillText(stars ? MEDAL_ICON[stars] : '▶', sx, ry);
+        ctx.font = `${Math.round(portrait ? 12 * z : 14 * z)}px "Segoe UI", sans-serif`;
+      } else if (stars) {
+        ctx.fillText(MEDAL_ICON[stars], sx, ry);
+      } else {
+        ctx.fillStyle = locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.45)';
+        ctx.fillText(locked ? '🔒' : '○', sx, ry);
+        ctx.fillStyle = locked ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.85)';
+      }
+    }
+  });
+  ctx.restore();
 }
 
 // ---------- ЭКРАН ЛИДЕРБОРДА ----------
@@ -507,13 +641,25 @@ function timingBar(ctx, run, m, q, cx, cy, z) {
   ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.roundRect(x0 - 5, cy - barH / 2 - 5, barW + 10, barH + 10, 9 * z);
   ctx.fill(); ctx.stroke();
-  // Зоны в долях дистанции: good (зелёная) и perfect (жёлтое ядро)
-  const goodW = (q.w * 0.6 * v / totalDist) * pxPerFrac;
-  const perfW = (q.w * 0.28 * v / totalDist) * pxPerFrac;
-  ctx.fillStyle = 'rgba(105,240,174,0.45)';
-  ctx.fillRect(targetX - goodW, cy - barH / 2, goodW * 2, barH);
-  ctx.fillStyle = '#ffd54a';
-  ctx.fillRect(targetX - perfW, cy - barH / 2, perfW * 2, barH);
+  // Зоны в долях дистанции: good (зелёная) и perfect (жёлтое ядро).
+  // В «Сумерках» зона проявляется только на последней трети подлёта.
+  const duskHidden = run.modifier === 'dusk' && p < 0.62;
+  if (!duskHidden) {
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(x0, cy - barH / 2, barW, barH, 6 * z); ctx.clip();
+    const goodW = (q.w * 0.6 * v / totalDist) * pxPerFrac;
+    const perfW = (q.w * 0.28 * v / totalDist) * pxPerFrac;
+    ctx.fillStyle = 'rgba(105,240,174,0.45)';
+    ctx.fillRect(targetX - goodW, cy - barH / 2, goodW * 2, barH);
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillRect(targetX - perfW, cy - barH / 2, perfW * 2, barH);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('? ? ?', targetX, cy);
+  }
   // Палочка-собака
   const px = Math.min(x0 + barW, x0 + p * pxPerFrac);
   const inPerfect = Math.abs(run.dog.dist - takeoffD) <= q.w * 0.28 * v;
@@ -586,10 +732,37 @@ function drawMenu(dt) {
   // Режим
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#ffd54a';
-  const modeName = app.mode === 'career'
-    ? `КАРЬЕРА · класс ${CLASSES[app.cls].name}`
-    : `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
+  let modeName;
+  if (app.mode === 'career') {
+    modeName = `КАРЬЕРА · ${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
+  } else if (app.mode === 'worldcup') {
+    modeName = `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
+  } else {
+    const db = dailyBest();
+    modeName = `ТРАССА ДНЯ ${todayStr()} · ${CLASSES[dailyCls()].name}${db != null ? ` · лучший: ${db}` : ''}`;
+  }
   ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.28);
+
+  // Подстрока: карта карьеры / модификатор дня
+  if (app.mode === 'career') {
+    drawCareerMap(ctx, w / 2, h * 0.315, z, isPortrait());
+  } else if (app.mode === 'daily') {
+    const mod = MODIFIERS[dailyModifier()];
+    if (mod.name) {
+      ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#ffab6b';
+      ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, h * 0.315);
+    }
+  }
+  // Сводка медалей (в карьере медали видны на карте)
+  if (app.mode !== 'career') {
+    const mc = medalCounts();
+    if (mc[3] + mc[2] + mc[1] > 0) {
+      ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, h * 0.345);
+    }
+  }
 
   // Карточки пород
   if (isPortrait()) {
@@ -751,6 +924,18 @@ function drawResults(run, z) {
       time: run.time, sct: run.sct, faults: run.score.faults,
       perfects: run.score.perfects, total: run.marks.length, maxCombo: run.score.maxCombo,
     });
+    const mod = MODIFIERS[run.modifier];
+    if (run.eliminated) {
+      app.result.title = 'ДИСКВАЛИФИКАЦИЯ — 3 отказа!';
+      app.result.stars = 0;
+      app.result.points = 0;
+      app.result.qualified = false;
+      app.result.clean = false;
+    } else if (mod.mult > 1) {
+      app.result.points = Math.round(app.result.points * mod.mult);
+    }
+    app.newMedal = recordMedal(app.result.stars);
+    if (app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
     if (app.result.points > app.bestPoints) {
       app.bestPoints = app.result.points;
       localStorage.setItem('agility_best', String(app.bestPoints));
@@ -781,18 +966,35 @@ function drawResults(run, z) {
 
   ctx.font = `${Math.round(21 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#e8f5ec';
+  const modLine = MODIFIERS[run.modifier].mult > 1 && !run.eliminated
+    ? ` (×${MODIFIERS[run.modifier].mult})` : '';
   const lines = [
     `Время: ${run.time.toFixed(2)}с  (SCT ${run.sct}с${res.timeFaults ? `, +${res.timeFaults} time faults` : ''})`,
     `Фолты: ${res.totalFaults}   Отказы: ${run.score.refusals}`,
     `Идеально: ${run.score.perfects}/${run.marks.length}   Макс. комбо: ×${run.score.maxCombo}`,
-    `Очки: ${res.points}${res.points >= app.bestPoints ? ' — РЕКОРД!' : ''}`,
+    `Очки: ${res.points}${modLine}${res.points >= app.bestPoints && res.points > 0 ? ' — РЕКОРД!' : ''}`,
   ];
   lines.forEach((l, i) => ctx.fillText(l, w / 2, py + (185 + i * 38) * z));
+  // Медаль за трассу
+  if (res.stars > 0) {
+    ctx.font = `${Math.round(30 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal ? ' Новая медаль!' : ''}`, w / 2, py + 345 * z);
+  }
+  if (app.mode === 'daily' && app.newDailyBest) {
+    ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
+  }
 
   ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
   const nextLabel = app.mode === 'career'
-    ? (res.qualified && app.cls !== 'masters' ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!` : 'ENTER — следующая трасса')
+    ? (res.qualified
+      ? (app.stage >= STAGES && app.cls !== 'masters'
+        ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!`
+        : 'ENTER — следующая трасса')
+      : 'ENTER — ещё попытка')
+    : app.mode === 'daily' ? 'ENTER — ещё попытка (лучший идёт в зачёт)'
     : 'ENTER — следующая трасса чемпионата';
   ctx.fillText(nextLabel, w / 2, py + ph - 64 * z);
   ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
@@ -838,7 +1040,7 @@ window.__agility = {
   app, startRun,
   setMode(m) { app.mode = m; },
   setClass(c) { app.cls = c; },
-  setSeed(s) { app.seed = s; },
+  setSeed(s) { app.stage = ((s - 1) % 5) + 1; }, // legacy-хук тестов: сид → этап
   getState() {
     return {
       state: app.state,
