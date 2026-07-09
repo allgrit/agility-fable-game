@@ -397,6 +397,28 @@ export class Run {
     }
     if (!dogDrawn) drawDog();
 
+    // Кольцо тайминга вокруг собаки: сжимается к ней, жёлтое = жми сейчас.
+    const tm = this.activeMark;
+    if (this.phase === 'running' && tm && tm.qte && tm.qte.state === 'active'
+        && tm.qte.def.kind === 'press') {
+      const q = tm.qte;
+      const v = Math.max(this.dog.speed, 0.5);
+      const dd = tm.entryD - TAKEOFF - this.dog.dist;   // м до точки отталкивания
+      const inPerfect = Math.abs(dd) <= q.w * 0.28 * v;
+      const inGood = Math.abs(dd) <= q.w * 0.6 * v;
+      const s = r.toScreen(this.dog.x, this.dog.y, 0.32 + (this.dog.elevation || 0));
+      const base = r.cam.zoom * 0.95;
+      const rad = base + Math.max(0, dd) * r.cam.zoom * 0.55;
+      ctx.save();
+      ctx.strokeStyle = inPerfect ? '#ffd54a' : inGood ? '#69f0ae' : 'rgba(255,255,255,0.65)';
+      ctx.lineWidth = inPerfect ? r.cam.zoom * 0.14 : r.cam.zoom * 0.08;
+      if (inPerfect) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 14; }
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, rad, rad * 0.8, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     r.drawHandler(this.handler);
     if (this.handler.speech) r.drawSpeech(this.handler, this.handler.speech.text, this.handler.speech.urgency);
     this.fx.draw(ctx, (x, y) => r.toScreen(x, y, 0.5));

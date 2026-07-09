@@ -161,14 +161,15 @@ function toggleMute() {
 // Радиус масштабируется от ширины, чтобы всё влезало на узких телефонах.
 function touchButtons() {
   const w = canvas.width, h = canvas.height;
-  const u = Math.min(w * 0.062, h * 0.075);  // радиус кнопки
-  const cx = u * 2.1, cy = h - u * 2.3;      // центр D-pad
+  // Радиус под палец: на узких высоких экранах опираемся на ширину.
+  const u = Math.max(Math.min(w * 0.095, h * 0.06), Math.min(w, h) * 0.055);
+  const cx = u * 2.3, cy = h - u * 2.5;      // центр D-pad
   return [
-    { code: 'ArrowUp',    x: cx,            y: cy - u * 1.15, r: u, label: '↑' },
-    { code: 'ArrowDown',  x: cx,            y: cy + u * 1.15, r: u, label: '↓' },
-    { code: 'ArrowLeft',  x: cx - u * 1.15, y: cy,            r: u, label: '←' },
-    { code: 'ArrowRight', x: cx + u * 1.15, y: cy,            r: u, label: '→' },
-    { code: 'Space', x: w - u * 1.9, y: h - u * 2.0, r: u * 1.4, label: 'ХОП' },
+    { code: 'ArrowUp',    x: cx,            y: cy - u * 1.18, r: u, label: '↑' },
+    { code: 'ArrowDown',  x: cx,            y: cy + u * 1.18, r: u, label: '↓' },
+    { code: 'ArrowLeft',  x: cx - u * 1.18, y: cy,            r: u, label: '←' },
+    { code: 'ArrowRight', x: cx + u * 1.18, y: cy,            r: u, label: '→' },
+    { code: 'Space', x: w - u * 2.0, y: h - u * 2.2, r: u * 1.45, label: 'ХОП' },
   ];
 }
 const touchPointers = new Map(); // pointerId → key code
@@ -408,14 +409,17 @@ function drawTouchControls(run) {
   const hot = expectedKey(run);
   for (const b of touchButtons()) {
     const active = touchPointers.size && [...touchPointers.values()].includes(b.code);
+    const isHot = b.code === hot;
     ctx.save();
-    ctx.globalAlpha = active ? 0.9 : 0.55;
-    ctx.fillStyle = active ? 'rgba(255,213,74,0.5)' : 'rgba(10,20,15,0.5)';
-    ctx.strokeStyle = b.code === hot ? '#ffd54a' : 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = b.code === hot ? 5 : 2.5;
+    // Плотный фон — кнопки не должны тонуть в толпе и траве.
+    ctx.fillStyle = active ? 'rgba(255,213,74,0.85)' : 'rgba(8,16,12,0.88)';
+    ctx.strokeStyle = isHot ? '#ffd54a' : 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = isHot ? 7 : 3;
+    if (isHot) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 18; }
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `900 ${Math.round(b.r * (b.label.length > 1 ? 0.5 : 0.9))}px "Segoe UI", sans-serif`;
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = active ? '#1a1a1a' : '#fff';
+    ctx.font = `900 ${Math.round(b.r * (b.label.length > 1 ? 0.48 : 0.85))}px "Segoe UI", sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(b.label, b.x, b.y + 2);
     ctx.restore();
@@ -559,7 +563,12 @@ function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
   const t = run.time - m.qteStart;
-  const cx = w / 2, cy = h - (IS_TOUCH ? 300 : 130) * z;
+  let cy = h - 130 * z;
+  if (IS_TOUCH) {
+    const topOfButtons = Math.min(...touchButtons().map(b => b.y - b.r));
+    cy = topOfButtons - 70 * z;
+  }
+  const cx = w / 2;
 
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
