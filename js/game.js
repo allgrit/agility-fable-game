@@ -354,21 +354,6 @@ export class Run {
     r.drawStartFinish(this.course.finish, 'ФИНИШ');
     r.drawJudge(this.course.field.w - 6, 5);
 
-    // Зона оптимального прыжка на земле: где окажется собака в идеальный момент нажатия.
-    const zm = this.activeMark;
-    if (this.phase === 'running' && zm && zm.qte && zm.qte.state === 'active'
-        && zm.qte.def.kind === 'press') {
-      const q = zm.qte;
-      const t = this.time - zm.qteStart;
-      const v = Math.max(this.dog.speed, 1.5);
-      const idealD = this.dog.dist + Math.max(0, q.target - t) * v;
-      this.zoneInPerfect = Math.abs(t - q.target) <= q.w * 0.28;
-      r.drawTimingZone(this.path, this.dog.dist + 0.3, idealD, {
-        perfect: v * q.w * 0.28,
-        good: v * q.w * 0.60,
-        late: v * q.w,
-      }, this.zoneInPerfect);
-    } else this.zoneInPerfect = false;
 
     // Снаряды в порядке y; собака рисуется поверх снаряда, на котором стоит.
     const sorted = [...this.marks].sort((a, b) => a.o.y - b.o.y);

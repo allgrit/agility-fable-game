@@ -354,11 +354,13 @@ function drawQte(run, m, z) {
     ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('?', cx, cy - 62 * z);
   } else if (def.kind === 'press') {
-    // press: клавиша-подсказка; тайминг читается по зоне прыжка на земле.
-    const inPerfect = run.zoneInPerfect;
+    // press: тайминг-бар — палочка бежит к зоне, скорость палочки = скорость собаки.
+    const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
+    const inGood = Math.abs(t - q.target) <= q.w * 0.6;
     const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
-    keycap(ctx, cx, cy, 50 * z * pulse, KEY_LABEL[def.key],
-      inPerfect ? '#ffd54a' : Math.abs(t - q.target) <= q.w ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
+    keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
+      inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
+    timingBar(ctx, run, q, t, cx, cy - 78 * z, z);
   } else {
     // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
     const key = def.key;
@@ -368,6 +370,38 @@ function drawQte(run, m, z) {
       rem < q.w ? '#ffd54a' : 'rgba(255,255,255,0.85)');
     ring(ctx, cx, cy, 52 * z + rem * 110 * z, rem < q.w ? '#ffd54a' : 'rgba(255,255,255,0.6)');
   }
+  ctx.restore();
+}
+
+// Тайминг-бар: палочка движется слева направо, попади в зону в момент нажатия.
+// px/сек растёт со скоростью собаки; ширина зоны = тайминг-окно (класс × порода).
+function timingBar(ctx, run, q, t, cx, cy, z) {
+  const total = q.target + q.w;               // сек: конец шкалы
+  const pxPerSec = (120 + run.dog.speed * 34) * z;
+  const barW = Math.min(total * pxPerSec, canvas.width * 0.8);
+  const scale = barW / total;                 // фактический px/сек после клампа
+  const x0 = cx - barW / 2, barH = 20 * z;
+  ctx.save();
+  // Подложка
+  ctx.fillStyle = 'rgba(12,20,16,0.78)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(x0 - 5, cy - barH / 2 - 5, barW + 10, barH + 10, 9 * z);
+  ctx.fill(); ctx.stroke();
+  // Зоны good (зелёная) и perfect (жёлтое ядро)
+  const zc = x0 + q.target * scale;
+  const goodW = q.w * 0.6 * scale, perfW = q.w * 0.28 * scale;
+  ctx.fillStyle = 'rgba(105,240,174,0.45)';
+  ctx.fillRect(zc - goodW, cy - barH / 2, goodW * 2, barH);
+  ctx.fillStyle = '#ffd54a';
+  ctx.fillRect(zc - perfW, cy - barH / 2, perfW * 2, barH);
+  // Палочка
+  const px = x0 + Math.min(t, total) * scale;
+  const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = inPerfect ? '#ffd54a' : 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = inPerfect ? 10 * z : 4 * z;
+  ctx.fillRect(px - 2 * z, cy - barH / 2 - 6 * z, 4 * z, barH + 12 * z);
   ctx.restore();
 }
 

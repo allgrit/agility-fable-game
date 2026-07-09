@@ -77,43 +77,6 @@ export class Renderer {
     }
   }
 
-  // Зона оптимального прыжка на трассе: одна мягкая жёлтая полоса с растворяющимися
-  // краями (длина = скорость × good-окно) + белая риска идеала. Минимум шума.
-  drawTimingZone(path, fromD, idealD, spread, inPerfect) {
-    const { ctx } = this;
-    const half = spread.good;
-    const d0 = Math.max(fromD, idealD - half);
-    const d1 = idealD + half;
-    if (d1 <= d0) return;
-    ctx.save();
-    ctx.lineCap = 'round';
-    const s0 = this.toScreen(path.pointAt(d0).x, path.pointAt(d0).y);
-    const s1 = this.toScreen(path.pointAt(d1).x, path.pointAt(d1).y);
-    const pulse = inPerfect ? 0.72 + Math.sin(this.time * 20) * 0.12 : 0.4;
-    const grad = ctx.createLinearGradient(s0.x, s0.y, s1.x, s1.y);
-    grad.addColorStop(0, 'rgba(255,213,74,0)');
-    grad.addColorStop(0.5, `rgba(255,213,74,${pulse})`);
-    grad.addColorStop(1, 'rgba(255,213,74,0)');
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = this.cam.zoom * 0.95;
-    ctx.beginPath();
-    for (let d = d0; d <= d1 + 0.001; d += Math.max(0.3, (d1 - d0) / 12)) {
-      const p = path.pointAt(Math.min(d, d1));
-      const s = this.toScreen(p.x, p.y);
-      if (d === d0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
-    }
-    ctx.stroke();
-    // Поперечная риска идеального момента
-    const ip = path.pointAt(idealD);
-    const tg = path.tangentAt(idealD);
-    const r1 = this.toScreen(ip.x - tg.y * 0.7, ip.y + tg.x * 0.7);
-    const r2 = this.toScreen(ip.x + tg.y * 0.7, ip.y - tg.x * 0.7);
-    ctx.strokeStyle = inPerfect ? '#ffffff' : 'rgba(255,255,255,0.8)';
-    ctx.lineWidth = Math.max(2, this.cam.zoom * 0.08);
-    ctx.beginPath(); ctx.moveTo(r1.x, r1.y); ctx.lineTo(r2.x, r2.y); ctx.stroke();
-    ctx.restore();
-  }
-
   drawJudge(x, y) {
     const { ctx } = this;
     this._shadow(x, y, 0.5);
