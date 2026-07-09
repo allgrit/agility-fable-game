@@ -27,7 +27,7 @@ export const QTE_DEFS = {
 
 // PS-style обманки: на press-снарядах показываем несколько кнопок,
 // настоящая раскрывается за reveal секунд до цели. Сложнее с классом.
-export const DECOY_CHANCE = { novice: 0, open: 0.35, excellent: 0.55, masters: 0.75 };
+export const DECOY_CHANCE = { novice: 0, open: 0.2, excellent: 0.5, masters: 0.75 };
 export const DECOY_REVEAL = { novice: 0.6, open: 0.55, excellent: 0.45, masters: 0.35 };
 const ALL_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 

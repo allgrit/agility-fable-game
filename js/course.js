@@ -4,11 +4,17 @@ import { makeRng } from './rng.js';
 export const FIELD = { w: 52, h: 36, margin: 4 };
 
 // windowMul — множитель окна реакции: новичкам заметно легче, мастерам строже.
+// Механики вводятся постепенно: Novice — только прыжки и туннели,
+// Open — + слалом и горка/бум, Excellent — + качели и стол.
 export const CLASSES = {
-  novice:    { name: 'Novice',    count: 12, contacts: 1, dogSpeed: 4.2, sctSpeed: 3.0, windowMul: 1.45 },
-  open:      { name: 'Open',      count: 14, contacts: 1, dogSpeed: 4.8, sctSpeed: 3.5, windowMul: 1.2 },
-  excellent: { name: 'Excellent', count: 16, contacts: 2, dogSpeed: 5.4, sctSpeed: 4.0, windowMul: 1.0 },
-  masters:   { name: 'Masters',   count: 18, contacts: 2, dogSpeed: 5.8, sctSpeed: 4.4, windowMul: 0.9 },
+  novice:    { name: 'Novice',    count: 12, contacts: 0, weave: false, table: false, seesaw: false,
+               dogSpeed: 4.2, sctSpeed: 3.0, windowMul: 1.45 },
+  open:      { name: 'Open',      count: 14, contacts: 1, weave: true, table: false, seesaw: false,
+               dogSpeed: 4.8, sctSpeed: 3.5, windowMul: 1.2 },
+  excellent: { name: 'Excellent', count: 16, contacts: 2, weave: true, table: true, seesaw: true,
+               dogSpeed: 5.4, sctSpeed: 4.0, windowMul: 1.0 },
+  masters:   { name: 'Masters',   count: 18, contacts: 2, weave: true, table: true, seesaw: true,
+               dogSpeed: 5.8, sctSpeed: 4.4, windowMul: 0.9 },
 };
 
 // Длина снаряда вдоль оси движения (м) и минимальный разбег перед ним.
@@ -31,15 +37,15 @@ export const CONTACT_TYPES = ['aframe', 'dogwalk', 'seesaw'];
 function buildTypeList(rng, cls) {
   const c = CLASSES[cls];
   const types = [];
-  const contacts = [...CONTACT_TYPES];
+  const contacts = CONTACT_TYPES.filter(t => c.seesaw || t !== 'seesaw');
   for (let i = 0; i < c.contacts; i++) {
     types.push(contacts.splice(rng.int(0, contacts.length - 1), 1)[0]);
   }
-  types.push('weave');
+  if (c.weave) types.push('weave');
   types.push('tunnel');
   if (rng.chance(0.55)) types.push('tunnel');
   if (rng.chance(0.6)) types.push('tire');
-  if (rng.chance(0.5)) types.push('table');
+  if (c.table && rng.chance(0.5)) types.push('table');
   if (rng.chance(0.45)) types.push('wall');
   if (rng.chance(0.4)) types.push('broad');
   while (types.length < c.count) types.push('jump');
@@ -151,11 +157,14 @@ export function validateCourse(course) {
     counts[o.type] = (counts[o.type] || 0) + 1;
     if (!inBounds(o.entry) || !inBounds(o.exit)) errs.push(`obstacle ${o.i} out of bounds`);
   }
-  if (counts.weave !== 1) errs.push('weave count != 1');
+  const cc = CLASSES[course.cls];
+  if ((counts.weave || 0) !== (cc.weave ? 1 : 0)) errs.push('weave count mismatch');
   if ((counts.tire || 0) > 1) errs.push('tire > 1');
-  if ((counts.table || 0) > 1) errs.push('table > 1');
+  if ((counts.table || 0) > (cc.table ? 1 : 0)) errs.push('table not allowed / > 1');
+  if (!cc.seesaw && (counts.seesaw || 0) > 0) errs.push('seesaw not allowed');
   const nContacts = CONTACT_TYPES.reduce((s, t) => s + (counts[t] || 0), 0);
-  if (nContacts < 1) errs.push('no contact obstacle');
+  if (nContacts < cc.contacts) errs.push('not enough contact obstacles');
+  if (cc.contacts === 0 && nContacts > 0) errs.push('contacts not allowed');
   if (!(counts.tunnel >= 1)) errs.push('no tunnel');
   if (course.obstacles.length !== CLASSES[course.cls].count) errs.push('wrong obstacle count');
   for (let a = 0; a < course.obstacles.length; a++) {
