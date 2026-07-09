@@ -173,4 +173,10 @@ export class AudioEngine {
   }
 
   click() { if (this.ctx) this._osc('square', 900, this.ctx.currentTime, 0.04, 0.08); }
+
+  reveal() {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    this._osc('sine', 620, t, 0.06, 0.16);
+    this._osc('sine', 990, t + 0.05, 0.12, 0.18);
+  }
 }

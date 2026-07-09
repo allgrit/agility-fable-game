@@ -1,6 +1,6 @@
 // Оркестратор забега: собака на сплайне, QTE у снарядов, судейство, камера, эффекты.
 import { Path } from './spline.js';
-import { Qte, QTE_DEFS } from './qte.js';
+import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE } from './qte.js';
 import { computeSct } from './scoring.js';
 
 const APPROACH = 4.2;   // м до входа в снаряд, когда звучит команда
@@ -106,6 +106,11 @@ export class Run {
         m.qte = new Qte(m.o.type, { windowScale: this.breed.windowScale });
         m.qteStart = this.time;
         m.state.active = true;
+        // PS-style обманка: только press-QTE, шанс растёт с классом.
+        if (m.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
+          m.decoys = makeDecoys(m.qte.def.key, this.course.cls);
+          m.decoys.revealAt = m.qte.target - m.decoys.reveal;
+        }
       }
     }
 
@@ -113,6 +118,10 @@ export class Run {
     if (m && m.qte) {
       const evs = m.qte.update(this.time - m.qteStart);
       this._handleQteEvents(m, evs);
+      if (m.decoys && !m.decoys.revealed && this.time - m.qteStart >= m.decoys.revealAt) {
+        m.decoys.revealed = true;
+        this.audio.reveal();
+      }
     }
 
     // Скорость

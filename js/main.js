@@ -228,6 +228,7 @@ function drawHud(run) {
 function expectedKey(run) {
   const m = run?.activeMark;
   if (!m || !m.qte || m.qte.state !== 'active') return null;
+  if (m.decoys && !m.decoys.revealed) return null; // не палим кнопку до раскрытия
   const q = m.qte, d = q.def;
   if (d.kind === 'rhythm') return d.keys[q.beatIdx % 2];
   if (d.kind === 'twoStage') return q.stage === 1 ? d.key2 : d.key;
@@ -316,9 +317,20 @@ function drawQte(run, m, z) {
     const rem = Math.max(0, tipT - t);
     keycap(ctx, cx, cy, 52 * z, KEY_LABEL[def.key2], '#ffd54a');
     ring(ctx, cx, cy, 52 * z + rem * 90 * z, '#ffd54a');
+  } else if (m.decoys && !m.decoys.revealed) {
+    // PS-style обманка: три кандидата, настоящая кнопка раскроется позже
+    const step = 92 * z;
+    const spin = Math.floor(run.time * 9) % m.decoys.options.length;
+    m.decoys.options.forEach((k, i) => {
+      keycap(ctx, cx + (i - 1) * step, cy, 42 * z * (i === spin ? 1.12 : 0.9), KEY_LABEL[k],
+        i === spin ? '#ffd54a' : 'rgba(255,255,255,0.45)');
+    });
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('?', cx, cy - 62 * z);
   } else {
     // press / стадия захода: клавиша + сжимающееся кольцо тайминга
-    const key = def.kind === 'press' ? def.key : def.key;
+    const key = def.key;
     const rem = Math.max(0, q.target - t);
     const closeness = 1 - Math.min(1, rem / def.lead);
     keycap(ctx, cx, cy, 52 * z * (1 + closeness * 0.12), KEY_LABEL[key],

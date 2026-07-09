@@ -25,6 +25,24 @@ export const QTE_DEFS = {
              holdTime: 3.0, window: 0.6, lead: 1.1 },
 };
 
+// PS-style обманки: на press-снарядах показываем несколько кнопок,
+// настоящая раскрывается за reveal секунд до цели. Сложнее с классом.
+export const DECOY_CHANCE = { novice: 0, open: 0.35, excellent: 0.55, masters: 0.75 };
+export const DECOY_REVEAL = { novice: 0.6, open: 0.55, excellent: 0.45, masters: 0.35 };
+const ALL_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+
+export function makeDecoys(realKey, cls, rand = Math.random) {
+  const pool = ALL_KEYS.filter(k => k !== realKey);
+  const a = pool.splice(Math.floor(rand() * pool.length), 1)[0];
+  const b = pool.splice(Math.floor(rand() * pool.length), 1)[0];
+  const options = [realKey, a, b];
+  for (let i = options.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+  return { options, reveal: DECOY_REVEAL[cls] ?? 0.5, revealed: false };
+}
+
 export function gradeFromDelta(dt, window) {
   const a = Math.abs(dt);
   if (a <= window * 0.28) return 'perfect';
