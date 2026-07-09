@@ -595,8 +595,10 @@ function drawQte(run, m, z) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
   if (def.kind === 'rhythm') {
-    // 6 стрелок ← → с бегущей подсветкой; шаг сжимается на узких экранах
-    const step = Math.min(64 * z, (w * 0.9) / def.beats);
+    // 6 стрелок ← → с бегущей подсветкой; шаг сжимается на узких экранах,
+    // кейкапы мельче шага — не перекрываются.
+    const step = Math.min(70 * z, (w * 0.9) / def.beats);
+    const kr = step * 0.44;
     for (let i = 0; i < def.beats; i++) {
       const x = cx + (i - (def.beats - 1) / 2) * step;
       const key = def.keys[i % 2];
@@ -604,7 +606,7 @@ function drawQte(run, m, z) {
       const isNext = i === q.beatIdx;
       const beatT = q.target + i * def.beat;
       const closeness = Math.max(0, 1 - Math.abs(t - beatT) / def.beat);
-      keycap(ctx, x, cy, 46 * z * (isNext ? 1 + closeness * 0.25 : 0.9), KEY_LABEL[key],
+      keycap(ctx, x, cy, kr * (isNext ? 1 + closeness * 0.25 : 0.9), KEY_LABEL[key],
         g ? (g === 'miss' ? '#ff6b6b' : '#69f0ae') : isNext ? '#ffd54a' : 'rgba(255,255,255,0.5)');
     }
   } else if (def.kind === 'hold' && q.holding) {
@@ -612,7 +614,8 @@ function drawQte(run, m, z) {
   } else if (def.kind === 'holdRelease' && q.holding) {
     // Шкала движения по снаряду с жёлтой зоной — отпустить в зоне
     const bw = 300 * z;
-    gaugeBar(ctx, cx, cy, bw, q.progress, '#4fc3f7', 'Отпусти ↑ в жёлтой зоне!', z);
+    gaugeBar(ctx, cx, cy, bw, q.progress, '#4fc3f7',
+      `Отпусти ${IS_TOUCH ? 'ВЕРХ' : '↑'} в жёлтой зоне!`, z);
     const zx = cx - bw / 2 + bw * def.zone[0], zw = bw * (def.zone[1] - def.zone[0]);
     ctx.fillStyle = 'rgba(244,196,48,0.85)';
     ctx.fillRect(zx, cy - 12 * z, zw, 24 * z);
@@ -637,17 +640,14 @@ function drawQte(run, m, z) {
     ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('?', cx, cy - 62 * z);
   } else if (def.kind === 'press') {
-    // press: тайминг-бар — палочка бежит к зоне, скорость палочки = скорость собаки.
-    // На таче клавишу в центре не дублируем — подсвечивается сама кнопка «ХОП».
-    const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
-    const inGood = Math.abs(t - q.target) <= q.w * 0.6;
+    // press: ГЛАВНЫЙ индикатор тайминга — кольцо вокруг собаки (game.js).
+    // Здесь только «какую клавишу жать» (на таче это делает сама кнопка).
     if (!IS_TOUCH) {
+      const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
+      const inGood = Math.abs(t - q.target) <= q.w * 0.6;
       const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
       keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
         inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
-      timingBar(ctx, run, m, q, cx, cy - 78 * z, z);
-    } else {
-      timingBar(ctx, run, m, q, cx, cy, z);
     }
   } else {
     // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
@@ -661,53 +661,8 @@ function drawQte(run, m, z) {
   ctx.restore();
 }
 
-// Тайминг-бар: палочка = позиция собаки на подлёте к точке отталкивания.
-// Скорость палочки — реальная скорость собаки; ширина зоны = окно × скорость.
-const TAKEOFF_UI = 1.3; // м до снаряда, синхронно с game.js TAKEOFF
-function timingBar(ctx, run, m, q, cx, cy, z) {
-  const takeoffD = m.entryD - TAKEOFF_UI;
-  const startD = m.startDist ?? takeoffD - 5;
-  const totalDist = Math.max(0.8, takeoffD - startD);
-  const p = (run.dog.dist - startD) / totalDist;   // 1.0 = точка отталкивания
-  const v = Math.max(run.dog.speed, 0.5);
-  const barW = Math.min(340 * z * (0.8 + v * 0.06), canvas.width * 0.8);
-  const x0 = cx - barW / 2, barH = 20 * z;
-  const targetX = x0 + barW * 0.78;                // цель на 78% — виден перелёт
-  const pxPerFrac = barW * 0.78;
-  ctx.save();
-  ctx.fillStyle = 'rgba(12,20,16,0.78)';
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.roundRect(x0 - 5, cy - barH / 2 - 5, barW + 10, barH + 10, 9 * z);
-  ctx.fill(); ctx.stroke();
-  // Зоны в долях дистанции: good (зелёная) и perfect (жёлтое ядро).
-  // В «Сумерках» зона проявляется только на последней трети подлёта.
-  const duskHidden = run.modifier === 'dusk' && p < 0.62;
-  if (!duskHidden) {
-    ctx.save();
-    ctx.beginPath(); ctx.roundRect(x0, cy - barH / 2, barW, barH, 6 * z); ctx.clip();
-    const goodW = (q.w * 0.6 * v / totalDist) * pxPerFrac;
-    const perfW = (q.w * 0.28 * v / totalDist) * pxPerFrac;
-    ctx.fillStyle = 'rgba(105,240,174,0.45)';
-    ctx.fillRect(targetX - goodW, cy - barH / 2, goodW * 2, barH);
-    ctx.fillStyle = '#ffd54a';
-    ctx.fillRect(targetX - perfW, cy - barH / 2, perfW * 2, barH);
-    ctx.restore();
-  } else {
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('? ? ?', targetX, cy);
-  }
-  // Палочка-собака
-  const px = Math.min(x0 + barW, x0 + p * pxPerFrac);
-  const inPerfect = Math.abs(run.dog.dist - takeoffD) <= q.w * 0.28 * v;
-  ctx.fillStyle = '#fff';
-  ctx.shadowColor = inPerfect ? '#ffd54a' : 'rgba(0,0,0,0.6)';
-  ctx.shadowBlur = inPerfect ? 10 * z : 4 * z;
-  ctx.fillRect(px - 2 * z, cy - barH / 2 - 6 * z, 4 * z, barH + 12 * z);
-  ctx.restore();
-}
+// Точка отталкивания для UI-расчётов, синхронно с game.js TAKEOFF.
+const TAKEOFF_UI = 1.3;
 
 function keycap(ctx, x, y, r, label, color) {
   ctx.save();

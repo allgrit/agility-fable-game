@@ -129,7 +129,12 @@ export class Run {
       // отталкивания при её ТЕКУЩЕЙ скорости — визуал и физика не расходятся.
       if (m.qte.def.kind === 'press' && m.qte.state === 'active') {
         const eta = (m.entryD - TAKEOFF - d.dist) / Math.max(d.speed, 0.5);
-        if (eta > 0) m.qte.target = (this.time - m.qteStart) + eta;
+        if (eta > 0) {
+          // Плавный дрейф цели: без скачков при бустах/замедлениях.
+          const want = (this.time - m.qteStart) + eta;
+          const drift = Math.max(-0.12, Math.min(0.12, want - m.qte.target));
+          m.qte.target += drift;
+        }
       }
       const evs = m.qte.update(this.time - m.qteStart);
       this._handleQteEvents(m, evs);
@@ -145,10 +150,12 @@ export class Run {
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
     if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
     if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
-      // На "синхронных" снарядах не убегаем дальше точки ожидания.
+      // На "синхронных" снарядах не убегаем дальше точки ожидания
+      // (градиентное замедление — без ощущения "вкопанной" остановки).
       const waitAt = this._waitPoint(m);
       if (d.dist >= waitAt) target = Math.min(target, 0);
       else if (d.dist >= waitAt - 1.2) target = Math.min(target, 2.0);
+      else if (d.dist >= waitAt - 2.0) target = Math.min(target, 3.0);
       if (m.o.type === 'weave' && d.dist > m.entryD - 0.5) target = Math.min(target, 2.4);
     }
     if (m && m.refusalT > 0) { m.refusalT -= dt; target = 0.4; }
@@ -179,7 +186,8 @@ export class Run {
     switch (m.o.type) {
       case 'table': return (m.entryD + m.exitD) / 2;
       case 'seesaw': return m.entryD + (m.exitD - m.entryD) * 0.55;
-      case 'tunnel': return m.entryD - 0.4;
+      // Туннель: не замираем у входа — собака влетает с ходу и ждёт уже внутри.
+      case 'tunnel': return m.entryD + 0.8;
       case 'weave': return m.exitD - 0.4;
       default: return m.exitD - 0.9; // contact: ждём отпускания у зоны
     }
@@ -209,7 +217,7 @@ export class Run {
           break;
         case 'early':
           // Раннее нажатие прощено: мягкий фидбек без фолта
-          this.popups.push({ text: 'Рано!', color: '#cfd8dc', x: this.dog.x, y: this.dog.y - 1.5, t: 0 });
+          this.popups.push({ text: 'Рано!', color: '#cfd8dc', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
           this.audio.click();
           break;
         case 'result':
@@ -226,7 +234,8 @@ export class Run {
     const { grade, faults, label } = res;
     const gradeText = { perfect: 'ИДЕАЛЬНО!', good: 'Хорошо!', late: 'Впритык…', miss: label || 'Ошибка!' }[grade];
     const gradeColor = { perfect: '#ffd54a', good: '#69f0ae', late: '#ffab6b', miss: '#ff6b6b' }[grade];
-    this.popups.push({ text: gradeText, color: gradeColor, x: d.x, y: d.y - 1.5, t: 0 });
+    // Выше собаки, чтобы не спорить с кольцом следующего QTE
+    this.popups.push({ text: gradeText, color: gradeColor, x: d.x, y: d.y - 2.6, t: 0 });
 
     if (grade === 'perfect') {
       this.score.perfects++;
@@ -403,9 +412,12 @@ export class Run {
     if (!dogDrawn) drawDog();
 
     // Кольцо тайминга вокруг собаки: сжимается к ней, жёлтое = жми сейчас.
+    // В «Сумерках» кольцо проявляется только у самой точки отталкивания.
     const tm = this.activeMark;
     if (this.phase === 'running' && tm && tm.qte && tm.qte.state === 'active'
-        && tm.qte.def.kind === 'press') {
+        && tm.qte.def.kind === 'press'
+        && !(this.modifier === 'dusk'
+          && tm.entryD - TAKEOFF - this.dog.dist > tm.qte.w * Math.max(this.dog.speed, 0.5))) {
       const q = tm.qte;
       const v = Math.max(this.dog.speed, 0.5);
       const dd = tm.entryD - TAKEOFF - this.dog.dist;   // м до точки отталкивания
