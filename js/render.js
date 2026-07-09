@@ -352,6 +352,9 @@ export class Renderer {
     ctx.translate(s.x, s.y);
     const hx = Math.cos(dog.heading), hy = Math.sin(dog.heading) * 0.86;
     ctx.rotate(Math.atan2(hy, hx));
+    // При движении влево не переворачиваем собаку на спину, а зеркалим вертикально:
+    // ноги остаются внизу, морда смотрит по ходу движения.
+    if (hx < 0) ctx.scale(1, -1);
     ctx.scale(z / 24, z / 24); // нормируем: рисуем в условных px при zoom=24
 
     const run = dog.runPhase || 0;
