@@ -77,6 +77,42 @@ export class Renderer {
     }
   }
 
+  // Зона оптимального прыжка прямо на трассе: полосы late/good/perfect вдоль пути.
+  // Ширина зон в метрах = скорость собаки × тайминг-окно, т.е. дышит вместе со скоростью.
+  drawTimingZone(path, fromD, idealD, spread, inPerfect) {
+    const { ctx } = this;
+    const layers = [
+      [spread.late, 'rgba(255,150,80,0.28)', 1.5],
+      [spread.good, 'rgba(105,240,174,0.34)', 1.28],
+      [spread.perfect, inPerfect ? 'rgba(255,213,74,0.85)' : 'rgba(255,213,74,0.55)', 1.05],
+    ];
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const [half, color, wMul] of layers) {
+      const d0 = Math.max(fromD, idealD - half);
+      const d1 = idealD + half;
+      if (d1 <= d0) continue;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = this.cam.zoom * 1.1 * wMul * 0.86;
+      ctx.beginPath();
+      for (let d = d0; d <= d1 + 0.001; d += Math.max(0.3, (d1 - d0) / 14)) {
+        const p = path.pointAt(Math.min(d, d1));
+        const s = this.toScreen(p.x, p.y);
+        if (d === d0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      }
+      ctx.stroke();
+    }
+    // Поперечная риска идеального момента
+    const ip = path.pointAt(idealD);
+    const tg = path.tangentAt(idealD);
+    const s1 = this.toScreen(ip.x - tg.y * 0.9, ip.y + tg.x * 0.9);
+    const s2 = this.toScreen(ip.x + tg.y * 0.9, ip.y - tg.x * 0.9);
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = Math.max(2, this.cam.zoom * 0.09);
+    ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); ctx.stroke();
+    ctx.restore();
+  }
+
   drawJudge(x, y) {
     const { ctx } = this;
     this._shadow(x, y, 0.5);

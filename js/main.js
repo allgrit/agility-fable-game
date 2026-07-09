@@ -28,12 +28,23 @@ const app = {
 
 const breedList = Object.values(BREEDS);
 
+// DPR-рендер: чёткая картинка на ретине; все hit-тесты в canvas-координатах.
+const DPR = Math.min(2, window.devicePixelRatio || 1);
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const vw = window.visualViewport?.width || window.innerWidth;
+  const vh = window.visualViewport?.height || window.innerHeight;
+  canvas.width = Math.round(vw * DPR);
+  canvas.height = Math.round(vh * DPR);
 }
 window.addEventListener('resize', resize);
+window.visualViewport?.addEventListener('resize', resize);
 resize();
+
+const isPortrait = () => canvas.height > canvas.width;
+function evXY(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * DPR, y: (e.clientY - r.top) * DPR };
+}
 
 // ---------- УПРАВЛЕНИЕ ----------
 const KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
@@ -83,11 +94,12 @@ window.addEventListener('keyup', (e) => {
 });
 canvas.addEventListener('pointerdown', (e) => {
   audio.ensure();
+  const p = evXY(e);
   const mz = muteZone();
-  if (Math.hypot(e.clientX - mz.x, e.clientY - mz.y) < mz.r) { toggleMute(); return; }
+  if (Math.hypot(p.x - mz.x, p.y - mz.y) < mz.r) { toggleMute(); return; }
   if (app.state === 'run') {
     for (const b of touchButtons()) {
-      if (Math.hypot(e.clientX - b.x, e.clientY - b.y) <= b.r * 1.25) {
+      if (Math.hypot(p.x - b.x, p.y - b.y) <= b.r * 1.25) {
         touchPointers.set(e.pointerId, b.code);
         app.run.input(b.code, true);
         return;
@@ -95,7 +107,7 @@ canvas.addEventListener('pointerdown', (e) => {
     }
     return;
   }
-  if (app.state === 'menu') menuClick(e.clientX, e.clientY);
+  if (app.state === 'menu') menuClick(p.x, p.y);
   else if (app.state === 'results') resultsKey('Enter');
 });
 function releaseTouch(e) {
@@ -122,6 +134,19 @@ function menuKey(code) {
 
 function menuClick(x, y) {
   const w = canvas.width, h = canvas.height;
+  if (isPortrait()) {
+    const top = h * 0.34, cardH = h * 0.115, gap = h * 0.015;
+    for (let i = 0; i < 3; i++) {
+      const cy = top + i * (cardH + gap);
+      if (y > cy && y < cy + cardH && Math.abs(x - w / 2) < w * 0.44) {
+        if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
+        return;
+      }
+    }
+    if (y > h * 0.78) startRun();
+    if (y < h * 0.3) { app.mode = app.mode === 'career' ? 'worldcup' : 'career'; audio.click(); }
+    return;
+  }
   const cardW = Math.min(260, w * 0.27);
   for (let i = 0; i < 3; i++) {
     const cx = w / 2 + (i - 1) * (cardW + 20);
@@ -195,13 +220,13 @@ function drawHud(run) {
   ctx.fillText(combo > 0 ? `Комбо ×${combo}` : 'Комбо —', w - 30, 56 * z);
   ctx.restore();
 
-  // Класс и порода
+  // Класс и порода (в портрете — под панелями, чтобы не наезжать)
   ctx.save();
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.75)';
   ctx.textAlign = 'center';
   const cname = run.course.name || `${run.course.class.name} · трасса #${app.seed}`;
-  ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, 22 * z);
+  ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, (isPortrait() ? 118 : 22) * z);
   ctx.restore();
 
   // Отсчёт
@@ -328,8 +353,14 @@ function drawQte(run, m, z) {
     ctx.fillStyle = '#ffd54a';
     ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('?', cx, cy - 62 * z);
+  } else if (def.kind === 'press') {
+    // press: клавиша-подсказка; тайминг читается по зоне прыжка на земле.
+    const inPerfect = run.zoneInPerfect;
+    const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
+    keycap(ctx, cx, cy, 50 * z * pulse, KEY_LABEL[def.key],
+      inPerfect ? '#ffd54a' : Math.abs(t - q.target) <= q.w ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
   } else {
-    // press / стадия захода: клавиша + сжимающееся кольцо тайминга
+    // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
     const key = def.key;
     const rem = Math.max(0, q.target - t);
     const closeness = 1 - Math.min(1, rem / def.lead);
@@ -408,6 +439,44 @@ function drawMenu(dt) {
   ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.28);
 
   // Карточки пород
+  if (isPortrait()) {
+    const top = h * 0.34, cardH = h * 0.115, gap = h * 0.015, cardW = w * 0.88;
+    breedList.forEach((b, i) => {
+      const cy = top + i * (cardH + gap), cx = w / 2;
+      const sel = i === app.breedIdx;
+      ctx.save();
+      ctx.fillStyle = sel ? 'rgba(30,52,40,0.92)' : 'rgba(14,26,20,0.8)';
+      ctx.strokeStyle = sel ? '#ffd54a' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = sel ? 4 : 1.5;
+      ctx.beginPath(); ctx.roundRect(cx - cardW / 2, cy, cardW, cardH, 16); ctx.fill(); ctx.stroke();
+      ctx.save();
+      ctx.translate(cx - cardW / 2 + cardH * 0.75, cy + cardH * 0.55);
+      ctx.scale(1.15, 1.15);
+      drawCardDog(ctx, { runPhase: app.t * (sel ? 8 : 3), happy: sel }, b, cardH * 0.55);
+      ctx.restore();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = sel ? '#ffe082' : '#fff';
+      ctx.font = `bold ${Math.round(19 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText(b.name, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.42);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText(b.desc, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.72);
+      ctx.restore();
+    });
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
+    ctx.fillText('ТАП ПО СОБАКЕ — НА СТАРТ!', w / 2, h * 0.84);
+    ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText('Кнопки на экране подскажут, что жать', w / 2, h * 0.88);
+    if (app.bestPoints) {
+      ctx.fillStyle = '#ffd54a';
+      ctx.fillText(`Рекорд: ${app.bestPoints} очков`, w / 2, h * 0.92);
+    }
+    ctx.restore();
+    return;
+  }
   const cardW = Math.min(260, w * 0.27), cardH = h * 0.34;
   breedList.forEach((b, i) => {
     const cx = w / 2 + (i - 1) * (cardW + 20), cy = h * 0.38;
