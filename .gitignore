@@ -1,3 +1,5 @@
 .playwright-mcp/
 *.png
 !docs/**/*.png
+node_modules/
+package-lock.json

@@ -426,23 +426,38 @@ function drawHud(run) {
     ctx.restore();
   }
 
-  // Обучающая подсказка (slow-mo при первой встрече механики)
+  // Обучающая подсказка (slow-mo при первой встрече механики).
+  // Многострочный баннер: на узких экранах текст переносится, а не вылезает.
   if (run.hintText) {
     ctx.save();
     ctx.textAlign = 'center';
-    const hy = canvas.height * 0.3;
     // На клавиатуре подсказки говорят клавишами, на таче — именами кнопок
     const hint = IS_TOUCH ? run.hintText
       : run.hintText.replace('ЛЕВО и ПРАВО', '← и →').replace(/ВЕРХ/g, '↑').replace(/ХОП/g, 'ПРОБЕЛ');
-    ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
-    const tw = ctx.measureText(hint).width;
+    const fs = Math.round((isPortrait() ? 19 : 24) * z);
+    ctx.font = `900 ${fs}px "Segoe UI", sans-serif`;
+    const maxW = w * 0.86;
+    const lines = [];
+    let line = '';
+    for (const word of hint.split(' ')) {
+      const probe = line ? line + ' ' + word : word;
+      if (ctx.measureText(probe).width > maxW && line) { lines.push(line); line = word; }
+      else line = probe;
+    }
+    if (line) lines.push(line);
+    const lh = fs * 1.35;
+    const bw = Math.min(maxW, Math.max(...lines.map(l => ctx.measureText(l).width))) + 44 * z;
+    const bh = lines.length * lh + 26 * z;
+    const hy = canvas.height * 0.3;
     ctx.fillStyle = 'rgba(10,18,14,0.88)';
     ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.roundRect(w / 2 - tw / 2 - 22 * z, hy - 28 * z, tw + 44 * z, 52 * z, 14 * z);
+    ctx.roundRect(w / 2 - bw / 2, hy - bh / 2, bw, bh, 14 * z);
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#ffd54a';
-    ctx.fillText(hint, w / 2, hy + 6 * z);
+    lines.forEach((l, i) => {
+      ctx.fillText(l, w / 2, hy - bh / 2 + 22 * z + i * lh + fs * 0.35);
+    });
     ctx.restore();
   }
 
