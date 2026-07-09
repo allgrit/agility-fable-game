@@ -149,6 +149,12 @@ export class Qte {
     switch (d.kind) {
       case 'press': {
         if (key !== d.key) { this._finish('miss', 5, wrongLabel(this.type)); break; }
+        // Прощение одного раннего нажатия: собака «ещё не готова», без фолта.
+        if (t < this.target - w && !this.earlyUsed) {
+          this.earlyUsed = true;
+          this._emit('early');
+          break;
+        }
         const g = gradeFromDelta(t - this.target, w);
         this._finish(g, g === 'miss' ? 5 : 0, g === 'miss' ? wrongLabel(this.type) : null);
         break;

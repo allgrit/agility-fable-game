@@ -214,12 +214,16 @@ canvas.addEventListener('pointerdown', (e) => {
   const mz = muteZone();
   if (Math.hypot(p.x - mz.x, p.y - mz.y) < mz.r) { toggleMute(); return; }
   if (app.state === 'run') {
+    // Магнит: тап засчитывается ближайшей кнопке в расширенной зоне —
+    // промах пальца на пару миллиметров не должен глотать ввод.
+    let best = null, bestD = Infinity;
     for (const b of touchButtons()) {
-      if (Math.hypot(p.x - b.x, p.y - b.y) <= b.r * 1.25) {
-        touchPointers.set(e.pointerId, b.code);
-        app.run.input(b.code, true);
-        return;
-      }
+      const dd = Math.hypot(p.x - b.x, p.y - b.y);
+      if (dd < bestD) { bestD = dd; best = b; }
+    }
+    if (best && bestD <= best.r * 2.4) {
+      touchPointers.set(e.pointerId, best.code);
+      app.run.input(best.code, true);
     }
     return;
   }

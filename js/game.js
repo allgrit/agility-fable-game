@@ -207,6 +207,11 @@ export class Run {
         case 'climb':
           this.audio.step();
           break;
+        case 'early':
+          // Раннее нажатие прощено: мягкий фидбек без фолта
+          this.popups.push({ text: 'Рано!', color: '#cfd8dc', x: this.dog.x, y: this.dog.y - 1.5, t: 0 });
+          this.audio.click();
+          break;
         case 'result':
           this._applyResult(m, e);
           break;

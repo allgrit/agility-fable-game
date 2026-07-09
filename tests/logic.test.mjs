@@ -230,3 +230,19 @@ test('PS-style обманки: настоящая клавиша всегда с
   assert.equal(DECOY_CHANCE.novice, 0);
   assert.ok(DECOY_REVEAL.masters < DECOY_REVEAL.open);
 });
+
+test('press: первое раннее нажатие прощается, второе — отказ', () => {
+  const q = new Qte('jump');
+  q.update(0.01);
+  let evs = q.press('Space', 0.05); // сильно раньше окна
+  assert.ok(evs.some(e => e.type === 'early'), 'нет события early');
+  assert.equal(q.state, 'active');
+  evs = q.press('Space', 0.06); // второй ранний — уже отказ
+  assert.equal(q.result?.grade, 'miss');
+
+  const q2 = new Qte('jump');
+  q2.update(0.01);
+  q2.press('Space', 0.05); // прощение
+  q2.press('Space', q2.target); // затем идеально
+  assert.equal(q2.result.grade, 'perfect');
+});
