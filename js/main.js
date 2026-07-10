@@ -519,7 +519,8 @@ function startRun() {
   const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
   if (dressed.ringTheme) renderer.theme = dressed.ringTheme;
   app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
-    modifier: activeModifier(), windowMul: mod.windowMul || 1 });
+    modifier: activeModifier(), windowMul: mod.windowMul || 1,
+    audioOffset: settings.audioOffset || 0 });
   renderer.cam.x = course.start.x;
   renderer.cam.y = course.start.y;
   app.state = 'run';
@@ -688,8 +689,15 @@ function expectedKey(run) {
   if (!m || !m.qte || m.qte.state !== 'active') return null;
   if (m.decoys && !m.decoys.revealed) return null; // не палим кнопку до раскрытия
   const q = m.qte, d = q.def;
-  if (d.kind === 'rhythm') return d.keys[q.beatIdx % 2];
+  if (d.kind === 'rhythm' || d.kind === 'groove') return d.keys[q.beatIdx % 2];
   if (d.kind === 'twoStage') return q.stage === 1 ? d.key2 : d.key;
+  if (d.kind === 'serp') {
+    // Направление раскрывается за reveal до бита
+    const t = run.time - m.qteStart;
+    const beatT = q.target + q.beatIdx * d.beat;
+    return t >= beatT - d.reveal ? q.seq[q.beatIdx] : null;
+  }
+  if (d.kind === 'freeze') return q.stage === 1 ? null : d.key; // во время счёта НЕ жать
   return d.key;
 }
 
@@ -1219,6 +1227,47 @@ function drawQte(run, m, z) {
       keycap(ctx, x, cy, kr * (isNext ? 1 + closeness * 0.25 : 0.9), KEY_LABEL[key],
         g ? (g === 'miss' ? '#ff6b6b' : '#69f0ae') : isNext ? '#ffd54a' : 'rgba(255,255,255,0.5)');
     }
+  } else if (def.kind === 'groove') {
+    // Лента нот: стойки-ноты едут справа налево к линии удара. Цвет по стороне.
+    drawGrooveLane(ctx, run, m, cx, cy, w, z);
+  } else if (def.kind === 'serp') {
+    // Серпантин: стрелки раскрываются за reveal до бита, до того — «?»
+    const step = Math.min(80 * z, (w * 0.8) / def.count);
+    const kr = step * 0.42;
+    for (let i = 0; i < def.count; i++) {
+      const x = cx + (i - (def.count - 1) / 2) * step;
+      const g = q.beatGrades[i];
+      const isNext = i === q.beatIdx;
+      const beatT = q.target + i * def.beat;
+      const revealed = t >= beatT - def.reveal;
+      const label = revealed ? KEY_LABEL[q.seq[i]] : '?';
+      keycap(ctx, x, cy, kr * (isNext ? 1.1 : 0.85), label,
+        g ? (g === 'miss' ? '#ff6b6b' : '#69f0ae')
+          : isNext && revealed ? '#ffd54a' : 'rgba(255,255,255,0.5)');
+    }
+  } else if (def.kind === 'freeze' && q.stage === 1) {
+    // Судья считает: большая цифра, шкала выдержки, предупреждение НЕ ЖАТЬ.
+    const secLeft = Math.ceil(def.freezeTime * (1 - q.progress));
+    ctx.fillStyle = q.inPause ? 'rgba(255,255,255,0.45)' : '#ffd54a';
+    ctx.font = `900 ${Math.round(58 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(q.inPause ? '…' : String(secLeft), cx, cy - 46 * z);
+    gaugeBar(ctx, cx, cy, 260 * z, q.progress, '#b388ff', 'ЗАМРИ! Не трогай кнопки', z);
+  } else if (def.kind === 'freeze' && q.stage === 2) {
+    const pulse = 1 + Math.sin(run.time * 26) * 0.12;
+    ctx.fillStyle = '#69f0ae';
+    ctx.font = `900 ${Math.round(46 * z * pulse)}px "Segoe UI", sans-serif`;
+    ctx.fillText('GO!', cx, cy - 54 * z);
+    keycap(ctx, cx, cy, 48 * z * pulse, KEY_LABEL[def.key], '#69f0ae');
+  } else if (def.kind === 'doubleTap' && q.stage === 1) {
+    // Второй тап в апексе: кольцо сжимается к моменту вершины полёта
+    const apexT = q.tapAt + (q.apexDelay ?? def.apexDelay);
+    const rem = Math.max(0, apexT - t);
+    const inWin = Math.abs(t - apexT) <= def.window2;
+    keycap(ctx, cx, cy, 48 * z, KEY_LABEL[def.key], inWin ? '#ffd54a' : '#8fd8ff');
+    ring(ctx, cx, cy, 48 * z + rem * 160 * z, inWin ? '#ffd54a' : '#8fd8ff');
+  } else if (def.kind === 'charge' && q.holding) {
+    // Дуга заряда: сектор зоны жёлтый, стрелка-прогресс бежит по дуге
+    drawChargeArc(ctx, cx, cy, 52 * z, q.progress, def.zone, z, IS_TOUCH);
   } else if (def.kind === 'hold' && q.holding) {
     gaugeBar(ctx, cx, cy, 260 * z, q.progress, '#69f0ae', 'ДЕРЖИМ… стол 3 сек', z);
   } else if (def.kind === 'holdRelease' && q.holding) {
@@ -1273,6 +1322,80 @@ function drawQte(run, m, z) {
 
 // Точка отталкивания для UI-расчётов, синхронно с game.js TAKEOFF.
 const TAKEOFF_UI = 1.3;
+
+// Лента нот Weave Groove: ноты-стойки едут справа налево к линии удара.
+// Синие ← и жёлтые → — цветокод стороны; на линии удара вспышка грейда.
+function drawGrooveLane(ctx, run, m, cx, cy, w, z) {
+  const q = m.qte, def = q.def;
+  const t = run.time - m.qteStart;
+  const laneW = Math.min(w * 0.86, 660 * z), laneH = 58 * z;
+  const lx = cx - laneW / 2, hitX = lx + laneW * 0.18;
+  const pxPerSec = laneW * 0.55 / Math.max(0.3, q.beat * 3); // ~3 бита видимы справа
+  ctx.save();
+  // Фон ленты
+  ctx.fillStyle = 'rgba(12,20,16,0.78)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(lx, cy - laneH / 2, laneW, laneH, 12 * z); ctx.fill(); ctx.stroke();
+  // Линия удара
+  ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(hitX, cy - laneH / 2 - 6 * z); ctx.lineTo(hitX, cy + laneH / 2 + 6 * z); ctx.stroke();
+  // Будущие ноты от текущего бита
+  if (q.nextBeatT !== null) {
+    ctx.beginPath(); ctx.rect(lx, cy - laneH, laneW, laneH * 2); ctx.clip();
+    for (let i = q.beatIdx; i < def.beats; i++) {
+      const beatT = q.nextBeatT + (i - q.beatIdx) * q.beat;
+      const x = hitX + (beatT - t) * pxPerSec;
+      if (x > lx + laneW + 20 * z) break;
+      const side = i % 2; // 0 = ←, 1 = →
+      const near = Math.max(0, 1 - Math.abs(beatT - t) / q.beat);
+      keycap(ctx, x, cy, (17 + near * 5) * z, side ? '→' : '←',
+        side ? '#e0a63c' : '#4b8bd4');
+    }
+  }
+  // Вспышка последнего грейда на линии удара
+  const lastG = q.beatGrades[q.beatGrades.length - 1];
+  if (q.beatGrades.length !== q._seenBeats) { q._seenBeats = q.beatGrades.length; q._lastFlash = t; }
+  if (lastG && t - (q._lastFlash ?? -9) < 0.28) {
+    ctx.fillStyle = { perfect: '#ffd54a', good: '#69f0ae', late: '#ffab6b', miss: '#ff6b6b' }[lastG];
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath(); ctx.arc(hitX, cy, 14 * z, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // BPM и прогресс стоек
+  ctx.fillStyle = '#b388ff';
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${Math.round(60 / q.beat)} BPM`, lx + 8 * z, cy - laneH / 2 - 10 * z);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText(`стойка ${Math.min(q.beatIdx + 1, def.beats)}/${def.beats}`, lx + laneW - 8 * z, cy - laneH / 2 - 10 * z);
+  ctx.restore();
+}
+
+// Дуга заряда spread/triple: 270° прогресса, зона отпуска — жёлтый сектор.
+function drawChargeArc(ctx, cx, cy, r, progress, zone, z, touch) {
+  const a0 = Math.PI * 0.75, sweep = Math.PI * 1.5; // 270°, от юго-запада по часовой
+  ctx.save();
+  ctx.lineCap = 'round';
+  // Фон дуги
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 10 * z;
+  ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + sweep); ctx.stroke();
+  // Жёлтый сектор зоны
+  ctx.strokeStyle = 'rgba(244,196,48,0.9)';
+  ctx.beginPath(); ctx.arc(cx, cy, r, a0 + sweep * zone[0], a0 + sweep * zone[1]); ctx.stroke();
+  // Прогресс
+  const inZone = progress >= zone[0] && progress <= zone[1];
+  ctx.strokeStyle = inZone ? '#ffd54a' : '#8fd8ff'; ctx.lineWidth = 6 * z;
+  if (inZone) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 12; }
+  ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + sweep * Math.min(1, progress)); ctx.stroke();
+  ctx.shadowBlur = 0;
+  // Подпись
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`Отпусти ${touch ? 'ХОП' : 'ПРОБЕЛ'} в жёлтом!`, cx, cy - r - 18 * z);
+  ctx.restore();
+}
 
 function keycap(ctx, x, y, r, label, color) {
   ctx.save();
@@ -1627,6 +1750,7 @@ function drawResults(run, z) {
     app.result = finalScore({
       time: run.time, sct: run.sct, faults: run.score.faults,
       perfects: run.score.perfects, total: run.marks.length, maxCombo: run.score.maxCombo,
+      bonus: run.bonusPoints || 0,
     });
     const mod = MODIFIERS[run.modifier];
     if (run.eliminated) {

@@ -56,6 +56,19 @@ const PLAY = `(async (opts = {}) => {
         else if (q.stage === 1 && (t - q.tipAt) >= d.tipDelay - 0.01) press(d.key2);
       } else if (d.kind === 'hold') {
         if (!q.holding && q.holdStart == null && t >= q.target - 0.01) press(d.key);
+      } else if (d.kind === 'groove') {
+        if (q.nextBeatT !== null && q.beatIdx < d.beats && t >= q.nextBeatT - 0.005) press(d.keys[q.beatIdx % 2]);
+      } else if (d.kind === 'serp') {
+        if (q.beatIdx < d.count && t >= q.target + q.beatIdx * d.beat - 0.01) press(q.seq[q.beatIdx]);
+      } else if (d.kind === 'charge') {
+        if (!q.holding && q.holdStart == null && t >= q.target - 0.01) press(d.key);
+        else if (q.holding && q.progress >= (d.zone[0] + d.zone[1]) / 2) release(d.key);
+      } else if (d.kind === 'freeze') {
+        if (q.stage === 0 && t >= q.target - 0.01) press(d.key);
+        else if (q.stage === 2 && (t - q.goAt) >= d.goWindow * 0.25 - 0.005) press(d.key);
+      } else if (d.kind === 'doubleTap') {
+        if (q.stage === 0 && t >= q.target - 0.01) press(d.key);
+        else if (q.stage === 1 && t >= q.tapAt + (q.apexDelay ?? d.apexDelay) - 0.005) press(d.key);
       }
     }
     proto.update.call(run, 1 / 60);

@@ -45,7 +45,11 @@ const AUTOPILOT = `(run, proto, opts = {}) => {
         if (d.kind === 'press') { if (t >= q.target - 0.01 + late) run.input(d.key, true); }
         else if (d.kind === 'rhythm') {
           if (q.beatIdx < d.beats && t >= q.target + q.beatIdx * d.beat - 0.01) run.input(d.keys[q.beatIdx % 2], true);
-        } else if (d.kind === 'holdRelease') {
+        } else if (d.kind === 'groove') {
+          if (q.nextBeatT !== null && q.beatIdx < d.beats && t >= q.nextBeatT - 0.005) run.input(d.keys[q.beatIdx % 2], true);
+        } else if (d.kind === 'serp') {
+          if (q.beatIdx < d.count && t >= q.target + q.beatIdx * d.beat - 0.01) run.input(q.seq[q.beatIdx], true);
+        } else if (d.kind === 'holdRelease' || d.kind === 'charge') {
           if (!q.holding && q.holdStart == null && t >= q.target - 0.01) run.input(d.key, true);
           else if (q.holding && q.progress >= (d.zone[0] + d.zone[1]) / 2) run.input(d.key, false);
         } else if (d.kind === 'twoStage') {
@@ -53,6 +57,12 @@ const AUTOPILOT = `(run, proto, opts = {}) => {
           else if (q.stage === 1 && (t - q.tipAt) >= d.tipDelay - 0.01) run.input(d.key2, true);
         } else if (d.kind === 'hold') {
           if (!q.holding && q.holdStart == null && t >= q.target - 0.01) run.input(d.key, true);
+        } else if (d.kind === 'freeze') {
+          if (q.stage === 0 && t >= q.target - 0.01) run.input(d.key, true);
+          else if (q.stage === 2 && (t - q.goAt) >= d.goWindow * 0.25 - 0.005) run.input(d.key, true);
+        } else if (d.kind === 'doubleTap') {
+          if (q.stage === 0 && t >= q.target - 0.01 + late) run.input(d.key, true);
+          else if (q.stage === 1 && t >= q.tapAt + (q.apexDelay ?? d.apexDelay) - 0.005) run.input(d.key, true);
         }
       } catch (e) { errs.push(String(e)); break; }
     }
@@ -419,7 +429,9 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
       const m = run.activeMark;
       if (m && m.qte && m.qte.state === 'active') {
         const q = m.qte, t = run.time - m.qteStart, d = q.def;
-        if (d.kind === 'press' && t >= q.target - 0.01) tap(d.key);
+        // На Novice шина (doubleTap) без апекса — одиночный тап как press
+        if ((d.kind === 'press' || (d.kind === 'doubleTap' && q.stage === 0))
+            && t >= q.target - 0.01) tap(d.key);
       }
       proto.update.call(run, 1 / 60);
     }

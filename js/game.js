@@ -1,22 +1,29 @@
 // Оркестратор забега: собака на сплайне, QTE у снарядов, судейство, камера, эффекты.
 import { Path } from './spline.js';
-import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE } from './qte.js';
+import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
 import { computeSct } from './scoring.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
-const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel']);
+const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
+  'spread', 'triple', 'serpentine']);
 
 // Обучающие подсказки: первая встреча со сложной механикой — slow-mo + инструкция.
 export const HINTS = {
-  weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО попеременно — в ритм подсветке!',
+  weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО в ритм метронома — стойки-ноты едут к линии удара!',
   aframe:  'ГОРКА: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
   dogwalk: 'БУМ: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
   seesaw:  'КАЧЕЛИ: ВЕРХ на заходе, потом ХОП, когда доска опустится!',
-  table:   'СТОЛ: зажми ХОП и держи, пока шкала не заполнится!',
+  table:   'СТОЛ: ХОП на заходе, потом ЗАМРИ — не трогай кнопки, пока судья считает. По сигналу GO — ХОП!',
+  tire2:   'ШИНА: ХОП на подлёте и ЕЩЁ раз в верхней точке полёта!',
+  spread:  'ЗАРЯД: зажми ХОП на подлёте и отпусти в жёлтом секторе дуги!',
+  triple:  'ТРОЙНОЙ: как заряд, но сектор уже — целься точнее!',
+  serpentine: 'СЕРПАНТИН: стрелки раскрываются на подлёте — жми сторону в темп!',
 };
 
 export class Run {
-  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1 }) {
+  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1, audioOffset = 0 }) {
+    this.audioOffset = audioOffset; // калибровка задержки звука для groove (сек)
+    this.bonusPoints = 0;           // событийные бонусы очков (Golden Weave и т.п.)
     this.course = course;
     this.breed = breed;
     this.modifier = modifier;
@@ -66,6 +73,30 @@ export class Run {
   drainEvents() { const e = this.events; this.events = []; return e; }
 
   get activeMark() { return this.activeIdx >= 0 ? this.marks[this.activeIdx] : null; }
+
+  // Опции QTE по типу снаряда: прогрессия механик и параметры V4.
+  _qteOpts(type) {
+    const cls = this.course.cls;
+    const opts = { windowScale: this.windowScale };
+    if (type === 'tire') {
+      // Double-tap шины — механика Excellent+; раньше это обычный тап
+      opts.noApex = cls === 'novice' || cls === 'open';
+    }
+    if (type === 'table') {
+      // Фейк-паузы судьи: с Open одна, с Masters до двух
+      const n = cls === 'masters' ? 2 : cls === 'novice' ? 0 : 1;
+      opts.fakePauses = Array.from({ length: n }, (_, i) => ({
+        at: 1.0 + i * 2.0 + Math.random() * 1.2, dur: 0.35 + Math.random() * 0.25,
+      }));
+    }
+    if (type === 'weave') {
+      opts.bpm = GROOVE_BPM[cls] || 112;
+      opts.grooveWindows = GROOVE_WINDOWS[cls] || GROOVE_WINDOWS.open;
+      opts.accelEvery = this.breed.ability === 'groove' ? 3 : 4;
+      opts.audioOffset = this.audioOffset || 0;
+    }
+    return opts;
+  }
 
   baseSpeed() {
     return this.course.class.dogSpeed * this.breed.speedMul;
@@ -141,18 +172,20 @@ export class Run {
         const v = Math.max(d.speed, this.baseSpeed() * 0.6);
         if (d.dist >= nm.entryD - TAKEOFF - lead * v) {
           this.activeIdx = next;
-          nm.qte = new Qte(nm.o.type, { windowScale: this.windowScale });
+          nm.qte = new Qte(nm.o.type, this._qteOpts(nm.o.type));
           nm.qteStart = this.time;
           nm.startDist = d.dist;
           nm.state.active = true;
-          // Первая встреча со сложной механикой: slow-mo + инструкция
-          if (HINTS[nm.o.type]) {
+          // Первая встреча со сложной механикой: slow-mo + инструкция.
+          // Шина до Excellent — простой тап, её double-tap-хинт под ключом tire2.
+          let hintKey = nm.o.type === 'tire' ? (nm.qte.noApex ? null : 'tire2') : nm.o.type;
+          if (hintKey && HINTS[hintKey]) {
             let seen = {};
             try { seen = JSON.parse(localStorage.getItem('agility_hints') || '{}'); } catch {}
-            if (!seen[nm.o.type]) {
-              seen[nm.o.type] = true;
+            if (!seen[hintKey]) {
+              seen[hintKey] = true;
               try { localStorage.setItem('agility_hints', JSON.stringify(seen)); } catch {}
-              this.hintText = HINTS[nm.o.type];
+              this.hintText = HINTS[hintKey];
               this.hintSlow = 2.4;
             }
           }
@@ -184,6 +217,17 @@ export class Run {
           && this.time - m.qteStart >= m.qte.target - m.decoys.reveal) {
         m.decoys.revealed = true;
         this.audio.reveal();
+      }
+      // Метроном groove: тик каждого бита шедулится точно в WebAudio-времени
+      // незадолго до бита (lookahead ~0.12с игрового времени).
+      if (m.qte.def.kind === 'groove' && m.qte.state === 'active'
+          && m.qte.nextBeatT !== null && m.qte.beatIdx < m.qte.def.beats) {
+        const tq = this.time - m.qteStart;
+        const eta = m.qte.nextBeatT - tq;
+        if (eta <= 0.12 && m.qte._scheduledBeat !== m.qte.beatIdx + m.qte.restarts * 100) {
+          m.qte._scheduledBeat = m.qte.beatIdx + m.qte.restarts * 100;
+          this.audio.metroTick?.(Math.max(0, eta), m.qte.beatIdx % 2);
+        }
       }
     }
 
@@ -258,6 +302,9 @@ export class Run {
       // Туннель: не замираем у входа — собака влетает с ходу и ждёт уже внутри.
       case 'tunnel': return m.entryD + 0.8;
       case 'weave': return m.exitD - 0.4;
+      case 'serpentine': return m.exitD - 0.4;
+      // Заряд: собака приседает у точки отталкивания, копит прыжок
+      case 'spread': case 'triple': return m.entryD - 0.9;
       default: return m.exitD - 0.9; // contact: ждём отпускания у зоны
     }
   }
@@ -283,6 +330,54 @@ export class Run {
           break;
         case 'climb':
           this.audio.step();
+          break;
+        // --- V4: стол «Замри» ---
+        case 'count':
+          this.audio.judgeCount?.(e.n);
+          this.handler.speech = { text: `${e.n}…`, t: 0, urgency: 0.2 };
+          break;
+        case 'freezeReset':
+          this.audio.miss();
+          this.popups.push({ text: 'Заново!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+          break;
+        case 'go':
+          this.audio.goSignal?.();
+          this.handler.speech = { text: e.text, t: 0, urgency: 1 };
+          this.r.zoomPunch();
+          break;
+        // --- V4: шина double-tap ---
+        case 'takeoff': {
+          this._jumpArc(m);
+          // Апекс — реальная середина дуги при текущей скорости
+          const arcLen = (m.exitD + 1.0) - (m.entryD - TAKEOFF);
+          m.qte.apexDelay = arcLen / 2 / Math.max(this.dog.speed, 1);
+          this.audio.jumpWhoosh();
+          break;
+        }
+        case 'apex':
+          this.slowmoT = 0.28;   // slow-mo кадр апекса
+          this.handler.speech = { text: e.text, t: 0, urgency: 1 };
+          this.popups.push({ text: 'ЕЩЁ!', color: '#8fd8ff', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+          break;
+        // --- V4: чарж-барьер ---
+        case 'chargeStart':
+          this.audio.chargeSound?.();
+          break;
+        // --- V4: groove ---
+        case 'accel':
+          this.popups.push({ text: `Темп! ${e.bpm} BPM`, color: '#b388ff', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+          this.audio.cheer(false);
+          break;
+        case 'restart':
+          this.popups.push({ text: 'С первой стойки!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+          this.audio.miss();
+          this.emit({ type: 'weaveRestart' });
+          break;
+        case 'golden':
+          this.bonusPoints += 1500;
+          this.fx.confettiBurst(this.dog.x, this.dog.y, 80, 'golden');
+          this.audio.fanfare();
+          this.emit({ type: 'goldenWeave' });
           break;
         case 'early':
           // Раннее нажатие прощено: мягкий фидбек без фолта
@@ -391,7 +486,10 @@ export class Run {
 
   _passEffects(m, grade) {
     const type = m.o.type;
-    if (['jump', 'tire', 'wall', 'broad'].includes(type) && grade !== 'miss') {
+    // Шина double-tap: дуга уже стартовала на событии takeoff
+    const tireAirborne = type === 'tire' && m.qte && m.qte.stage >= 1;
+    if (['jump', 'tire', 'wall', 'broad', 'spread', 'triple'].includes(type)
+        && grade !== 'miss' && !tireAirborne) {
       this._jumpArc(m);
       this.audio.jumpWhoosh();
     }

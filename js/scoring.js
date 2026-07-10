@@ -39,7 +39,7 @@ export function timeFaults(timeSec, sct) {
   return Math.max(0, Math.ceil(timeSec - sct));
 }
 
-export function finalScore({ time, sct, faults, perfects, total, maxCombo }) {
+export function finalScore({ time, sct, faults, perfects, total, maxCombo, bonus = 0 }) {
   const tf = timeFaults(time, sct);
   const totalFaults = faults + tf;
   const clean = faults === 0 && tf === 0;
@@ -51,8 +51,9 @@ export function finalScore({ time, sct, faults, perfects, total, maxCombo }) {
   const title = clean
     ? (perfects === total ? 'БЕЗУПРЕЧНО! Q + Перфект!' : 'ЧИСТЫЙ ПРОГОН! Квалификация «Q»!')
     : totalFaults <= 5 ? 'Хороший прогон' : totalFaults <= 15 ? 'Есть над чем работать' : 'Тренируемся дальше!';
+  // bonus — событийные добавки за прогон (Golden Weave, риск ×2 и т.п.)
   const points = Math.max(0, Math.round(
-    1000 * (total ? perfects / total : 0) + maxCombo * 50 + Math.max(0, sct - time) * 20 - totalFaults * 30
+    1000 * (total ? perfects / total : 0) + maxCombo * 50 + Math.max(0, sct - time) * 20 - totalFaults * 30 + bonus
   ));
   return { timeFaults: tf, totalFaults, clean, qualified, stars, title, points };
 }
