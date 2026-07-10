@@ -714,24 +714,53 @@ export class Run {
       else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
     };
     // Босс-призрак: бежит по трассе с постоянным темпом (время босса = SCT × k).
-    // Полупрозрачный силуэт с именем — соперник, которого надо обогнать.
+    // Заметный силуэт с ореолом и шлейфом — соперник, которого надо обогнать.
     if (this.ghost && this.phase !== 'countdown') {
       const gd = Math.min(this.path.length - 0.1,
         Math.max(0, this.time / this.ghost.time * this.path.length));
       const gp = this.path.pointAt(gd);
       const gt = this.path.tangentAt(gd);
+      const gh = Math.atan2(gt.y, gt.x);
       const glook = BREEDS[this.ghost.look] || this.breed;
+      // Фиолетовый ореол под призраком — виден на любой теме
+      const gsb = r.toScreen(gp.x, gp.y, 0.3);
       ctx.save();
-      ctx.globalAlpha = 0.38;
-      r.drawDog({ x: gp.x, y: gp.y, heading: Math.atan2(gt.y, gt.x),
+      ctx.fillStyle = 'rgba(179,136,255,0.30)';
+      ctx.shadowColor = '#b388ff'; ctx.shadowBlur = 22;
+      ctx.beginPath();
+      ctx.ellipse(gsb.x, gsb.y, r.cam.zoom * 0.9, r.cam.zoom * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // Шлейф из призрачных силуэтов позади
+      ctx.save();
+      for (let k = 3; k >= 1; k--) {
+        const bd = Math.max(0, gd - k * 0.9);
+        const bp = this.path.pointAt(bd);
+        const bs = r.toScreen(bp.x, bp.y, 0.32);
+        ctx.globalAlpha = 0.10 * (4 - k);
+        ctx.fillStyle = '#b388ff';
+        ctx.beginPath();
+        ctx.ellipse(bs.x, bs.y, r.cam.zoom * 0.5, r.cam.zoom * 0.28, gh, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = 0.62;
+      r.drawDog({ x: gp.x, y: gp.y, heading: gh,
         runPhase: this.time * 9, elevation: 0, airborne: false }, glook);
       ctx.restore();
-      const gs = r.toScreen(gp.x, gp.y, 1.6);
+      // Подпись на плашке, пульсирует
+      const gs = r.toScreen(gp.x, gp.y, 1.9);
       ctx.save();
-      ctx.globalAlpha = 0.8;
       ctx.textAlign = 'center';
-      ctx.font = `bold ${Math.round(r.cam.zoom * 0.42)}px "Segoe UI", sans-serif`;
-      ctx.fillStyle = '#b388ff';
+      const gfs = Math.round(r.cam.zoom * 0.5 * (1 + Math.sin(r.time * 5) * 0.06));
+      ctx.font = `900 ${gfs}px "Segoe UI", sans-serif`;
+      const gtw = ctx.measureText(`👻 ${this.ghost.name}`).width;
+      ctx.fillStyle = 'rgba(20,12,36,0.78)';
+      ctx.beginPath();
+      ctx.roundRect(gs.x - gtw / 2 - 8, gs.y - gfs * 0.95, gtw + 16, gfs * 1.4, 8);
+      ctx.fill();
+      ctx.fillStyle = '#d1b3ff';
       ctx.fillText(`👻 ${this.ghost.name}`, gs.x, gs.y);
       ctx.restore();
     }
