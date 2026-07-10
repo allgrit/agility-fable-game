@@ -152,9 +152,9 @@ const toasts = []; // {icon, name, desc, t}
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
 // Настройки (доступность и громкости)
 const settings = (() => {
-  try { return { shake: true, colorblind: false, oneButton: false, music: 0.6, sfx: 0.6,
+  try { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6,
     ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
-  catch { return { shake: true, colorblind: false, oneButton: false, music: 0.6, sfx: 0.6 }; }
+  catch { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6 }; }
 })();
 function saveSettings() {
   try { localStorage.setItem('agility_settings', JSON.stringify(settings)); } catch {}
@@ -302,22 +302,11 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.code === 'Escape') return toMenu();
     if (e.code === 'KeyR') return startRun();
-    let code = e.code;
-    if (settings.oneButton && KEYS.includes(code)) {
-      const exp = expectedKey(app.run);
-      if (exp) code = exp;
-    }
-    keyRemap.set(e.code, code); // чтобы keyup отпускал ту же подменённую клавишу
-    app.run.input(code, true);
+    app.run.input(e.code, true);
   }
 });
-const keyRemap = new Map(); // e.code → фактически отправленная клавиша (режим одной кнопки)
 window.addEventListener('keyup', (e) => {
-  if (app.state === 'run') {
-    const code = keyRemap.get(e.code) || e.code;
-    keyRemap.delete(e.code);
-    app.run.input(code, false);
-  }
+  if (app.state === 'run') app.run.input(e.code, false);
 });
 // iOS: гасим системные жесты — выделение, лупу, контекстное меню, двойной тап.
 canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
@@ -347,13 +336,8 @@ canvas.addEventListener('pointerdown', (e) => {
       if (dd < bestD) { bestD = dd; best = b; }
     }
     if (best && bestD <= best.r * 2.4) {
-      let code = best.code;
-      if (settings.oneButton) {
-        const exp = expectedKey(app.run);
-        if (exp) code = exp;
-      }
-      touchPointers.set(e.pointerId, code);
-      app.run.input(code, true);
+      touchPointers.set(e.pointerId, best.code);
+      app.run.input(best.code, true);
     }
     return;
   }
@@ -962,9 +946,8 @@ function settingsRows(px, py, pw, z) {
   return [
     { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
     { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
-    { id: 'oneButton', name: 'Режим одной кнопки (все QTE — ХОП)', kind: 'toggle', y: py + 190 * z },
-    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 250 * z },
-    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 305 * z },
+    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 205 * z },
+    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 260 * z },
   ];
 }
 
@@ -1937,7 +1920,7 @@ requestAnimationFrame(frame);
 
 // Хук для тестового харнесса (Playwright)
 window.__agility = {
-  meta, saveMeta: () => saveMeta(meta),
+  meta, saveMeta: () => saveMeta(meta), settings, applySettings: saveSettings, breedLocked,
   app, startRun,
   setMode(m) { app.mode = m; },
   setClass(c) { app.cls = c; },
