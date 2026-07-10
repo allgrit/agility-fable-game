@@ -315,6 +315,13 @@ function menuClick(x, y) {
 }
 
 function resultsKey(code) {
+  // Первый инпут во время секвенции = скип к финальному состоянию протокола
+  if (app.run && app.run.finishT < 3.4 && code !== 'Escape') {
+    app.run.finishT = 3.4;
+    audio.click();
+    return;
+  }
+  if (code === 'KeyS') return shareResult();
   if (code === 'Enter' || code === 'Space') {
     if (app.mode === 'career') {
       if (app.result && app.result.qualified) {
@@ -412,16 +419,16 @@ function drawHud(run) {
   }
   ctx.restore();
 
-  // Отсчёт
-  if (run.phase === 'countdown') {
-    const c = Math.ceil(run.countdownT);
+  // Ритуал старта: тишина, стойка, «На старт…» — затем взрывное «ВПЕРЁД!»
+  if (run.phase === 'countdown' || (run.phase === 'running' && run.time < 0.6)) {
     ctx.save();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `900 ${Math.round(120 * z)}px "Segoe UI", sans-serif`;
+    const isGo = run.phase === 'running';
+    ctx.font = `900 ${Math.round((isGo ? 110 : 44) * z)}px "Segoe UI", sans-serif`;
     ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    const txt = c > 0 ? String(c) : 'ВПЕРЁД!';
+    const txt = isGo ? 'ВПЕРЁД!' : 'На старт…';
     ctx.strokeText(txt, w / 2, canvas.height * 0.4);
-    ctx.fillStyle = '#ffd54a';
+    ctx.fillStyle = isGo ? '#ffd54a' : 'rgba(255,255,255,0.85)';
     ctx.fillText(txt, w / 2, canvas.height * 0.4);
     ctx.restore();
   }
@@ -1106,64 +1113,117 @@ function drawResults(run, z) {
     saveRunToBoard(run, app.result);
   }
   const res = app.result;
+  // Протокол судьи печатается поэтапно (ft = сек после финиша); скип — любая клавиша.
+  const ft = run.finishT;
+  const ease = (a, dur = 0.45) => Math.max(0, Math.min(1, (ft - a) / dur));
+  const stamp = (a) => { // звук штампа один раз на этап
+    run._stamps = run._stamps || {};
+    if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
+  };
   const pw = Math.min(520 * z, w * 0.9), ph = Math.min(460 * z, h * 0.85);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   ctx.save();
-  ctx.fillStyle = 'rgba(6,12,10,0.72)';
+  ctx.fillStyle = `rgba(6,12,10,${0.72 * ease(0, 0.3)})`;
   ctx.fillRect(0, 0, w, h);
   panel(ctx, px, py, pw, ph);
   ctx.textAlign = 'center';
-  ctx.fillStyle = res.clean ? '#ffd54a' : '#fff';
-  ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
-  wrapText(ctx, res.title, w / 2, py + 52 * z, pw - 60, 40 * z);
 
-  // Звёзды
-  const t = Math.min(1, run.finishT / 1.5);
+  // 1.4с: вердикт-титул с лёгким наклоном и появлением
+  if (ft >= 1.4) {
+    stamp(1.4);
+    const k = ease(1.4, 0.25);
+    ctx.save();
+    ctx.translate(w / 2, py + 52 * z);
+    ctx.rotate(-0.02 * k);
+    ctx.scale(0.8 + 0.2 * k, 0.8 + 0.2 * k);
+    ctx.globalAlpha = k;
+    ctx.fillStyle = res.clean ? '#ffd54a' : '#fff';
+    ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
+    wrapText(ctx, res.title, 0, 0, pw - 60, 40 * z);
+    ctx.restore();
+  }
+
+  // 2.6с+: звёзды вылетают по одной
   for (let i = 0; i < 3; i++) {
-    const on = i < res.stars && t > (i + 1) / 3.5;
+    const at = 2.6 + i * 0.25;
+    const on = i < res.stars && ft > at;
+    if (on) stamp(at);
+    const k = on ? ease(at, 0.2) : 1;
     const sx = w / 2 + (i - 1) * 76 * z;
-    ctx.font = `${Math.round(52 * z)}px "Segoe UI", sans-serif`;
+    ctx.font = `${Math.round(52 * z * (on ? 0.7 + 0.3 * k : 1))}px "Segoe UI", sans-serif`;
     ctx.fillStyle = on ? '#ffd54a' : 'rgba(255,255,255,0.18)';
     ctx.fillText('★', sx, py + 130 * z);
   }
 
   ctx.font = `${Math.round(21 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillStyle = '#e8f5ec';
   const modLine = MODIFIERS[run.modifier].mult > 1 && !run.eliminated
     ? ` (×${MODIFIERS[run.modifier].mult})` : '';
-  const lines = [
-    `Время: ${run.time.toFixed(2)}с  (SCT ${run.sct}с${res.timeFaults ? `, +${res.timeFaults} time faults` : ''})`,
-    `Фолты: ${res.totalFaults}   Отказы: ${run.score.refusals}`,
-    `Идеально: ${run.score.perfects}/${run.marks.length}   Макс. комбо: ×${run.score.maxCombo}`,
-    `Очки: ${res.points}${modLine}${res.points >= app.bestPoints && res.points > 0 ? ' — РЕКОРД!' : ''}`,
+  // 0.4с: время (rolling), 0.9с: фолты, 1.9с: перфекты, 2.2с: очки (rolling)
+  const rows = [
+    [0.4, () => `Время: ${(run.time * ease(0.4)).toFixed(2)}с  (SCT ${run.sct}с${res.timeFaults ? `, +${res.timeFaults} time faults` : ''})`],
+    [0.9, () => `Фолты: ${res.totalFaults}   Отказы: ${run.score.refusals}`],
+    [1.9, () => `Идеально: ${run.score.perfects}/${run.marks.length}   Макс. комбо: ×${run.score.maxCombo}`],
+    [2.2, () => `Очки: ${Math.round(res.points * ease(2.2, 0.6))}${modLine}${ft > 2.9 && res.points >= app.bestPoints && res.points > 0 ? ' — РЕКОРД!' : ''}`],
   ];
-  lines.forEach((l, i) => ctx.fillText(l, w / 2, py + (185 + i * 38) * z));
-  // Медаль за трассу
-  if (res.stars > 0) {
-    ctx.font = `${Math.round(30 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal ? ' Новая медаль!' : ''}`, w / 2, py + 345 * z);
+  rows.forEach(([at, fn], i) => {
+    if (ft < at) return;
+    stamp(at);
+    ctx.globalAlpha = ease(at, 0.2);
+    ctx.fillStyle = '#e8f5ec';
+    ctx.fillText(fn(), w / 2, py + (185 + i * 38) * z);
+    ctx.globalAlpha = 1;
+  });
+
+  // 3.0с: медаль с bounce
+  if (res.stars > 0 && ft >= 3.0) {
+    stamp(3.0);
+    const k = ease(3.0, 0.35);
+    const bounce = 1 + Math.sin(k * Math.PI) * 0.5;
+    ctx.font = `${Math.round(30 * z * bounce)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal && ft > 3.4 ? ' Новая медаль!' : ''}`, w / 2, py + 345 * z);
   }
-  if (app.mode === 'daily' && app.newDailyBest) {
+  if (app.mode === 'daily' && app.newDailyBest && ft > 3.2) {
     ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffd54a';
     ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
   }
 
-  ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
-  const nextLabel = app.mode === 'career'
-    ? (res.qualified
-      ? (app.stage >= STAGES && app.cls !== 'masters'
-        ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!`
-        : 'ENTER — следующая трасса')
-      : 'ENTER — ещё попытка')
-    : app.mode === 'daily' ? 'ENTER — ещё попытка (лучший идёт в зачёт)'
-    : 'ENTER — следующая трасса чемпионата';
-  ctx.fillText(nextLabel, w / 2, py + ph - 64 * z);
-  ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillText('R — переиграть · ESC — меню', w / 2, py + ph - 32 * z);
+  if (ft > 1.0) {
+    ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+    const nextLabel = app.mode === 'career'
+      ? (res.qualified
+        ? (app.stage >= STAGES && app.cls !== 'masters'
+          ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!`
+          : 'ENTER — следующая трасса')
+        : 'ENTER — ещё попытка')
+      : app.mode === 'daily' ? 'ENTER — ещё попытка (лучший идёт в зачёт)'
+      : 'ENTER — следующая трасса чемпионата';
+    ctx.fillText(nextLabel, w / 2, py + ph - 64 * z);
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('R — переиграть · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+  }
   ctx.restore();
+}
+
+// Шеринг: эмодзи-строка (паттерн Wordle) в буфер + PNG-карточка текущего кадра
+function shareResult() {
+  const res = app.result, run = app.run;
+  if (!res || !run) return;
+  const stars = '⭐'.repeat(res.stars) || '—';
+  const txt = `🐕 Agility Trial! · ${run.course.name || 'Трасса'} · ${run.time.toFixed(2)}с ${stars}` +
+    `${res.clean ? ' · Q!' : ''} · комбо ×${run.score.maxCombo} · ${res.points} очков\n` +
+    'https://allgrit.github.io/agility-fable-game/';
+  try { navigator.clipboard?.writeText(txt); } catch {}
+  try {
+    const a = document.createElement('a');
+    a.download = 'agility-result.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  } catch {}
+  toasts.push({ icon: '📋', name: 'Скопировано!', desc: 'Текст в буфере + PNG-карточка', t: 0 });
+  audio.click();
 }
 
 // ---------- ЦИКЛ ----------
@@ -1174,6 +1234,7 @@ function frame(now) {
   app.t += dt;
 
   if (app.state === 'menu' || app.state === 'board') {
+    audio.music?.setState('menu');
     drawMenu(dt);
     drawMuteIcon();
     drawTrophyIcon();
@@ -1185,7 +1246,7 @@ function frame(now) {
     app.run.draw();
     drawHud(app.run);
     const z = Math.min(canvas.width, canvas.height) / 700;
-    if (app.run.phase === 'finished' && app.run.finishT > 1.2) {
+    if (app.run.phase === 'finished' && app.run.finishT > 0.4) {
       app.state = 'results';
     }
     if (app.state === 'results') drawResults(app.run, z);

@@ -1,4 +1,6 @@
 // WebAudio-синтезатор: все SFX генерируются кодом, без аудиофайлов.
+import { MusicEngine } from './music.js';
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -22,6 +24,7 @@ export class AudioEngine {
       this.master.connect(this.ctx.destination);
       this._noise = this._makeNoise();
       this._startCrowd();
+      this.music = new MusicEngine(this.ctx, this.master);
       return true;
     } catch { this.enabled = false; return false; }
   }
@@ -178,5 +181,29 @@ export class AudioEngine {
     if (!this.ctx) return; const t = this.ctx.currentTime;
     this._osc('sine', 620, t, 0.06, 0.16);
     this._osc('sine', 990, t + 0.05, 0.12, 0.18);
+  }
+
+  // Голосовые шаблоны хендлера: у каждой механики свой питч и ритм крика —
+  // трасса различима на слух (столп «слышишь трассу раньше, чем видишь»).
+  voice(type) {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    const cry = (f0, f1, at, dur, peak = 0.16) =>
+      this._osc('sawtooth', f0, t + at, dur, peak, null, f1);
+    switch (type) {
+      case 'jump': case 'wall': cry(300, 430, 0, 0.12); break;                    // «Хоп!» — короткий взлёт
+      case 'tire': cry(330, 470, 0, 0.1); cry(330, 470, 0.12, 0.1); break;        // «Хоп-хоп!» дубль
+      case 'broad': cry(280, 400, 0, 0.16, 0.18); break;                          // протяжнее
+      case 'tunnel': cry(240, 170, 0, 0.28, 0.18); break;                         // низкий нисходящий «Тунне-е-ель»
+      case 'weave': cry(340, 340, 0, 0.07); cry(380, 380, 0.11, 0.07); cry(420, 420, 0.22, 0.07); break; // тройной ритм
+      case 'aframe': case 'dogwalk': cry(220, 380, 0, 0.3, 0.18); break;          // восходящий «Вверх!»
+      case 'seesaw': cry(300, 240, 0, 0.14); cry(240, 300, 0.16, 0.14); break;    // качающийся
+      case 'table': cry(320, 320, 0, 0.08); cry(260, 260, 0.14, 0.14); break;     // стаккато «Стол. Ждать»
+      default: this.bark(1);
+    }
+  }
+
+  crowdRoar(v = 0.5) {
+    if (!this.ctx) return;
+    this._noiseBurst(this.ctx.currentTime, 0.4, 0.06 + v * 0.1, 700, 0.4);
   }
 }

@@ -91,13 +91,17 @@ function tryLayout(rng, types) {
   let dir = rng.range(-0.35, 0.35); // радианы, старт направо
   const start = { ...pos };
 
+  const HARD = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table']);
   for (let i = 0; i < types.length; i++) {
     const spec = OBSTACLES[types[i]];
+    // «Дыхание» после сложного блока: длиннее прямая, мягче поворот —
+    // волны напряжения вместо ровного плато.
+    const breathe = i > 0 && HARD.has(types[i - 1]);
     let placed = false;
     for (let attempt = 0; attempt < 14 && !placed; attempt++) {
-      const gap = rng.range(spec.gap[0], spec.gap[1]);
+      const gap = rng.range(spec.gap[0], spec.gap[1]) * (breathe ? 1.3 : 1);
       // Поворот: серпантин — знак чередуется с шумом; у края тянем к центру.
-      let turn = rng.range(0.25, 1.05) * (rng.chance(0.5) ? 1 : -1);
+      let turn = rng.range(0.25, 1.05) * (rng.chance(0.5) ? 1 : -1) * (breathe ? 0.35 : 1);
       if (i === 0) turn = rng.range(-0.3, 0.3);
       let nd = dir + turn;
       const entry = { x: pos.x + Math.cos(nd) * gap, y: pos.y + Math.sin(nd) * gap };

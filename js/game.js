@@ -44,8 +44,10 @@ export class Run {
     };
     this.handler = { x: course.start.x - 1.5, y: course.start.y + 2, runPhase: 0, speed: 0, facing: 1, commanding: false, speech: null };
     this.phase = 'countdown';   // countdown → running → finished
-    this.countdownT = 3.2;
-    this.lastCount = 4;
+    this.countdownT = 2.2;      // ритуал старта: тишина, стойка, рука судьи
+    this.sprint = { active: false, boost: 0, lastKey: null };
+    this.slowmoT = 0;           // micro-slow-mo последнего барьера
+    this.desatT = 0;            // десатурация при потере комбо
     this.time = 0;
     this.score = { faults: 0, perfects: 0, goods: 0, lates: 0, misses: 0, combo: 0, maxCombo: 0, refusals: 0 };
     this.activeIdx = -1;
@@ -73,8 +75,20 @@ export class Run {
 
   // ---------- ВВОД ----------
   input(key, isDown) {
+    if (this.phase !== 'running') return;
+    // Финишный mash-спурт: после последнего снаряда ←→ попеременно = рывок
+    if (this.sprint.active && isDown && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+      if (this.sprint.lastKey && this.sprint.lastKey !== key) {
+        this.sprint.boost = Math.min(0.45, this.sprint.boost + 0.06);
+        this.audio.step();
+        if (this.sprint.boost >= 0.3) this.audio.crowdRoar(this.sprint.boost);
+        this.fx.dust(this.dog.x, this.dog.y);
+      }
+      this.sprint.lastKey = key;
+      return;
+    }
     const m = this.activeMark;
-    if (this.phase !== 'running' || !m || !m.qte) return;
+    if (!m || !m.qte) return;
     const t = this.time - m.qteStart;
     const evs = isDown ? m.qte.press(key, t) : m.qte.release(key, t);
     this._handleQteEvents(m, evs);
@@ -84,16 +98,21 @@ export class Run {
   update(dt) {
     if (this.hitstop > 0) { this.hitstop -= dt; dt *= 0.15; }
     if (this.hintSlow > 0) { this.hintSlow -= dt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
+    if (this.slowmoT > 0) { this.slowmoT -= dt; dt *= 0.5; }
+    if (this.desatT > 0) this.desatT -= dt;
     this.time += this.phase === 'running' ? dt : 0;
+    this.audio.music?.speedFilter(this.dog.speed);
 
     if (this.phase === 'countdown') {
+      // Ритуал старта: полная тишина, собака дрожит в стойке, судья поднимает руку.
       this.countdownT -= dt;
-      const c = Math.ceil(this.countdownT);
-      if (c !== this.lastCount && c > 0) { this.lastCount = c; this.audio.countdown(); }
+      this.dog.tremble = this.countdownT < 1.6;
       if (this.countdownT <= 0) {
         this.phase = 'running';
+        this.dog.tremble = false;
         this.audio.whistle();
         this.audio.crowdLevel(0.3);
+        this.audio.music?.setState('run');
         this.emit({ type: 'go' });
       }
     }
@@ -168,8 +187,15 @@ export class Run {
       }
     }
 
+    // Финишный спурт активируется, когда все снаряды пройдены
+    if (!this.sprint.active && this.marks.every(mm => mm.resolved) && this.phase === 'running') {
+      this.sprint.active = true;
+      this.emit({ type: 'sprint' });
+    }
+    if (this.sprint.active) this.sprint.boost = Math.max(0, this.sprint.boost - dt * 0.2);
+
     // Скорость
-    let target = this.baseSpeed() * this.comboMul();
+    let target = this.baseSpeed() * this.comboMul() * (1 + this.sprint.boost);
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
     if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
     if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
@@ -182,6 +208,7 @@ export class Run {
       if (m.o.type === 'weave' && d.dist > m.entryD - 0.5) target = Math.min(target, 2.4);
     }
     if (m && m.refusalT > 0) { m.refusalT -= dt; target = 0.4; }
+    for (const mm of this.marks) if (mm.state.rattle > 0) mm.state.rattle -= dt;
     d.speed += (target - d.speed) * Math.min(1, dt * 5);
     d.dist += d.speed * dt;
 
@@ -205,6 +232,7 @@ export class Run {
       d.happy = true;
       this.audio.crowdLevel(0.9);
       const clean = this.score.faults === 0;
+      this.audio.music?.setState(clean || this.score.faults <= 5 ? 'results_win' : 'results_fail');
       if (clean) { this.audio.fanfare(); this.audio.cheer(true); }
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
@@ -230,7 +258,7 @@ export class Run {
         case 'command':
           this.handler.speech = { text: e.text, t: 0, urgency: 0 };
           this.handler.commanding = true;
-          this.audio.bark(this.breed.size);
+          this.audio.voice(m.o.type); // голосовой шаблон механики — слышно, что впереди
           this.emit({ type: 'command', text: e.text, obstacle: m.o });
           break;
         case 'beat':
@@ -268,6 +296,7 @@ export class Run {
     // Выше собаки, чтобы не спорить с кольцом следующего QTE
     this.popups.push({ text: gradeText, color: gradeColor, x: d.x, y: d.y - 2.6, t: 0 });
 
+    const hadCombo = this.score.combo >= 3;
     if (grade === 'perfect') {
       this.score.perfects++;
       this.score.combo += this.breed.comboRate;
@@ -275,7 +304,9 @@ export class Run {
       this.boost = 1.4;
       this.hitstop = 0.09;
       this.audio.perfect();
+      this.audio.music?.duck(0.3, 0.1);
       this.fx.sparks(d.x, d.y, '#ffd54a');
+      this.r.zoomPunch();
       if (this.score.combo >= 4) this.audio.cheer(false);
       this.audio.crowdLevel(Math.min(0.8, 0.3 + this.score.combo * 0.07));
     } else if (grade === 'good') {
@@ -285,16 +316,21 @@ export class Run {
     } else if (grade === 'late') {
       this.score.lates++;
       this.score.combo = 0;
+      if (hadCombo) { this.desatT = 0.5; this.audio.music?.dip(); }
+      // Планка дрожит от близкого пролёта
+      if (m.o.type === 'jump' || m.o.type === 'wall') { m.state.rattle = 0.6; this.audio.creak(); }
       this.audio.crowdLevel(0.25);
     } else {
       this.score.misses++;
       this.score.combo = 0;
       this.score.faults += faults;
       this.slowT = 0.6;
+      if (hadCombo) { this.desatT = 0.55; this.audio.music?.dip(); }
       this.audio.miss();
       this.audio.gasp();
       this.audio.crowdLevel(0.15);
       this.r.shake(0.55);
+      this.r.kick(Math.cos(d.heading) * 8, Math.sin(d.heading) * 6);
       const isKnock = (m.o.type === 'jump' || m.o.type === 'wall') && label !== 'Отказ!';
       if (isKnock) {
         m.state.knocked = true;
@@ -316,6 +352,11 @@ export class Run {
       this.emit({ type: 'fault', faults });
     }
     this.emit({ type: 'grade', grade });
+    this.audio.music?.setIntensity(Math.floor(this.score.combo));
+
+    // Micro-slow-mo на последнем снаряде перед спуртом
+    const unresolved = this.marks.filter(mm => !mm.resolved).length;
+    if (unresolved === 0 && grade !== 'miss') this.slowmoT = 0.35;
 
     // Эффект прохождения снаряда
     this._passEffects(m, grade);
@@ -358,7 +399,26 @@ export class Run {
       if (t >= 0.98) this.audio.land();
     } else if (this._jump && d.dist > this._jump.to) {
       this._jump = null;
+      // Приземление: сквош + двойная пыль + лёгкий камера-кик
+      d.landT = 1;
       this.fx.dust(d.x, d.y);
+      this.fx.dust(d.x + 0.3, d.y);
+      this.r.kick(0, 3);
+    }
+    if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
+
+    // След лап на земле + trail-позиции для комбо-шлейфа
+    this._pawAcc = (this._pawAcc || 0) + d.speed * dt;
+    if (this._pawAcc > 0.9 && !d.airborne && !d.hidden && this.phase === 'running') {
+      this._pawAcc = 0;
+      this.fx.paw(d.x, d.y, d.heading);
+    }
+    if (!this.trail) this.trail = [];
+    this._trailAcc = (this._trailAcc || 0) + dt;
+    if (this._trailAcc > 0.045) {
+      this._trailAcc = 0;
+      this.trail.push({ x: d.x, y: d.y, e: d.elevation || 0, h: d.heading });
+      if (this.trail.length > 7) this.trail.shift();
     }
     const m = this.marks.find(mm => d.dist >= mm.entryD - 0.2 && d.dist <= mm.exitD + 0.2);
     if (m) {
@@ -420,9 +480,10 @@ export class Run {
   draw() {
     const r = this.r, ctx = r.ctx;
     r.drawField(this.course.field, Math.min(1, this.score.combo * 0.12 + (this.phase === 'finished' ? 1 : 0)));
+    this.fx.drawGround(ctx, (x, y) => r.toScreen(x, y)); // следы лап — под всем
     r.drawStartFinish(this.course.start, 'СТАРТ');
     r.drawStartFinish(this.course.finish, 'ФИНИШ');
-    r.drawJudge(this.course.field.w - 6, 5);
+    r.drawJudge(this.course.field.w - 6, 5, this.phase === 'countdown' && this.countdownT < 1.4);
 
 
     // Снаряды в порядке y; собака рисуется поверх снаряда, на котором стоит.
@@ -431,6 +492,22 @@ export class Run {
     const onMark = this.marks.find(mm =>
       this.dog.dist >= mm.entryD - 0.2 && this.dog.dist <= mm.exitD + 0.2 && mm.o.type !== 'tunnel');
     const drawDog = () => {
+      // Комбо-шлейф: полупрозрачные силуэты позади (HSL-перелив с ×8)
+      if (this.score.combo >= 4 && this.trail && this.phase === 'running') {
+        this.trail.forEach((p, i) => {
+          const a = (i / this.trail.length) * 0.3;
+          const s = r.toScreen(p.x, p.y, 0.32 + p.e);
+          ctx.save();
+          ctx.globalAlpha = a;
+          ctx.fillStyle = this.score.combo >= 8
+            ? `hsl(${(r.time * 240 + i * 40) % 360}, 90%, 60%)` : this.breed.body;
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, r.cam.zoom * 0.5 * this.breed.size, r.cam.zoom * 0.28 * this.breed.size,
+            Math.atan2(Math.sin(p.h) * 0.86, Math.cos(p.h)), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        });
+      }
       if (!this.dog.hidden) r.drawDog(this.dog, this.breed);
       else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
     };
@@ -497,6 +574,30 @@ export class Run {
       g.addColorStop(1, 'rgba(10,6,30,0.55)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    // Десатурация на полсекунды при потере комбо — мир «гаснет»
+    if (this.desatT > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'saturation';
+      ctx.fillStyle = `hsla(0, 0%, 50%, ${Math.min(0.85, this.desatT * 1.7)})`;
+      ctx.fillRect(0, 0, r.canvas.width, r.canvas.height);
+      ctx.restore();
+    }
+
+    // Подсказка финишного спурта
+    if (this.sprint.active && this.phase === 'running') {
+      ctx.save();
+      ctx.textAlign = 'center';
+      const zz = Math.min(r.canvas.width, r.canvas.height) / 700;
+      const pulse = 1 + Math.sin(r.time * 14) * 0.06;
+      ctx.font = `900 ${Math.round(34 * zz * pulse)}px "Segoe UI", sans-serif`;
+      ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      const msg = 'ФИНИШ! ЖМИ ← → !';
+      ctx.strokeText(msg, r.canvas.width / 2, r.canvas.height * 0.24);
+      ctx.fillStyle = this.sprint.boost > 0.25 ? '#ffd54a' : '#fff';
+      ctx.fillText(msg, r.canvas.width / 2, r.canvas.height * 0.24);
       ctx.restore();
     }
 

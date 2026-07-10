@@ -14,7 +14,7 @@ export class Renderer {
   resize(w, h) { this.canvas.width = w; this.canvas.height = h; }
 
   toScreen(x, y, e = 0) {
-    const z = this.cam.zoom;
+    const z = this.cam.zoom * (this.cam.zoomFx || 1);
     const sx = (x - this.cam.x) * z + this.canvas.width / 2 + this._shx;
     const sy = (y - this.cam.y) * z * 0.86 + this.canvas.height / 2 - e * z + this._shy;
     return { x: sx, y: sy, scale: z };
@@ -24,11 +24,18 @@ export class Renderer {
     this.time += dt;
     this.cam.shake = Math.max(0, this.cam.shake - dt * 2.2);
     const sh = this.cam.shake;
-    this._shx = (Math.random() - 0.5) * sh * 14;
-    this._shy = (Math.random() - 0.5) * sh * 10;
+    // Направленный кик затухает пружиной, зум-панч — экспонентой
+    this._kickX = (this._kickX || 0) * Math.pow(0.0001, dt);
+    this._kickY = (this._kickY || 0) * Math.pow(0.0001, dt);
+    this._punch = (this._punch || 0) * Math.pow(0.002, dt);
+    this._shx = (Math.random() - 0.5) * sh * 14 + this._kickX;
+    this._shy = (Math.random() - 0.5) * sh * 10 + this._kickY;
+    this.cam.zoomFx = 1 + this._punch;
   }
 
   shake(power = 0.6) { this.cam.shake = Math.min(1, this.cam.shake + power); }
+  kick(dx, dy) { this._kickX = (this._kickX || 0) + dx; this._kickY = (this._kickY || 0) + dy; }
+  zoomPunch(p = 0.06) { this._punch = Math.min(0.12, (this._punch || 0) + p); }
 
   // ---------- ПОЛЕ ----------
   drawField(field, crowdHype) {
@@ -77,12 +84,22 @@ export class Renderer {
     }
   }
 
-  drawJudge(x, y) {
+  drawJudge(x, y, armUp = false) {
     const { ctx } = this;
     this._shadow(x, y, 0.5);
     const s = this.toScreen(x, y, 0.9), z = this.cam.zoom;
     ctx.fillStyle = '#37474f';
     ctx.fillRect(s.x - z * 0.18, s.y - z * 0.5, z * 0.36, z * 0.9);
+    if (armUp) {
+      // Поднятая рука — ритуал старта
+      ctx.strokeStyle = '#37474f'; ctx.lineWidth = z * 0.11; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x + z * 0.16, s.y - z * 0.4);
+      ctx.lineTo(s.x + z * 0.34, s.y - z * 0.95);
+      ctx.stroke();
+      ctx.fillStyle = '#ffe0bd';
+      ctx.beginPath(); ctx.arc(s.x + z * 0.36, s.y - z * 1.0, z * 0.09, 0, Math.PI * 2); ctx.fill();
+    }
     ctx.fillStyle = '#ffe0bd';
     ctx.beginPath(); ctx.arc(s.x, s.y - z * 0.72, z * 0.2, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff';
@@ -135,9 +152,11 @@ export class Renderer {
           this._pole(wx + px * side * 0.45, wy + py * side * 0.45, 0.55, '#3b6fd4', 0.1);
         }
         if (!state.knocked) {
-          this._barLine(o.x - px * wsp, o.y - py * wsp, o.x + px * wsp, o.y + py * wsp, 0.62, '#f0ede4', 0.1);
+          // Дрожь планки после пролёта впритык
+          const rat = state.rattle > 0 ? Math.sin(this.time * 45) * state.rattle * 0.09 : 0;
+          this._barLine(o.x - px * wsp, o.y - py * wsp, o.x + px * wsp, o.y + py * wsp, 0.62 + rat, '#f0ede4', 0.1);
           const m1 = { x: o.x - px * 0.25, y: o.y - py * 0.25 }, m2 = { x: o.x + px * 0.25, y: o.y + py * 0.25 };
-          this._barLine(m1.x, m1.y, m2.x, m2.y, 0.62, '#e05555', 0.1);
+          this._barLine(m1.x, m1.y, m2.x, m2.y, 0.62 + rat, '#e05555', 0.1);
         } else {
           this._barLine(o.x - px * wsp, o.y - py * wsp + 0.2, o.x + px * wsp, o.y + py * wsp - 0.1, 0.06, '#f0ede4', 0.1);
         }
@@ -359,7 +378,14 @@ export class Renderer {
 
     const run = dog.runPhase || 0;
     const speedK = Math.min(1.4, (dog.speed || 4) / 5);
-    const stretch = dog.airborne ? 1.25 : 1 + Math.sin(run * 2) * 0.06 * speedK;
+    let stretch = dog.airborne ? 1.25 : 1 + Math.sin(run * 2) * 0.06 * speedK;
+    // Сквош при приземлении: сплющивание с пружинным возвратом
+    if (dog.landT > 0) {
+      const sq = Math.sin(dog.landT * Math.PI) * 0.24;
+      ctx.scale(1 + sq, 1 - sq);
+    }
+    // Дрожь в стойке перед стартом
+    if (dog.tremble) ctx.translate(Math.sin(this.time * 40) * 0.8, 0);
 
     // Ноги
     ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';

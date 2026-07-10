@@ -1,6 +1,34 @@
 // Система частиц: пыль, конфетти, искры, обломки планок, звёздочки Perfect.
 export class Particles {
-  constructor() { this.list = []; }
+  constructor() {
+    this.list = [];
+    this.ground = []; // следы лап: кольцевой буфер, рисуются ПОД миром
+  }
+
+  paw(x, y, heading) {
+    // Пара отпечатков поперёк курса
+    const px = -Math.sin(heading), py = Math.cos(heading);
+    for (const side of [-0.14, 0.14]) {
+      this.ground.push({ x: x + px * side, y: y + py * side, life: 1 });
+    }
+    if (this.ground.length > 64) this.ground.splice(0, this.ground.length - 64);
+  }
+
+  drawGround(ctx, toScreen) {
+    for (const p of this.ground) {
+      p.life -= 0.004;
+      if (p.life <= 0) continue;
+      const s = toScreen(p.x, p.y);
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.3, p.life * 0.3);
+      ctx.fillStyle = '#1f4527';
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, s.scale * 0.07, s.scale * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    this.ground = this.ground.filter(p => p.life > 0);
+  }
 
   spawn(p) { this.list.push({ life: 1, rot: 0, vr: 0, grav: 0, drag: 1, size: 0.15, ...p }); }
 
