@@ -273,11 +273,13 @@ function freshMeta() {
 test('мета: косточки — медаль платится только за улучшение, firstClear однократный', () => {
   const m = freshMeta();
   const a = earnFromRun(m, { points: 1000, stars: 2, trackId: 't1', isDaily: false, todayStr: '10.07.2026' });
-  assert.equal(a.bones, 10 + 5 + 10 + 30); // очки + 🥉+🥈 + первое прохождение
+  assert.equal(a.bones, 11 + 5 + 10 + 30); // очки(/90) + 🥉+🥈 + первое прохождение
   const b = earnFromRun(m, { points: 1000, stars: 2, trackId: 't1', isDaily: false, todayStr: '10.07.2026' });
-  assert.equal(b.bones, 10); // только очки
+  assert.equal(b.bones, 11); // только очки
   const c = earnFromRun(m, { points: 1000, stars: 3, trackId: 't1', isDaily: false, todayStr: '10.07.2026' });
-  assert.equal(c.bones, 10 + 20); // улучшение до золота
+  assert.equal(c.bones, 11 + 20); // улучшение до золота
+  const d5 = earnFromRun(m, { points: 900, stars: 0, trackId: 't1', isDaily: false, todayStr: '10.07.2026', runOfDay: 5 });
+  assert.equal(d5.bones, 10 + 20); // бонус активности за 5-й прогон дня
 });
 
 test('мета: streak трассы дня растёт по дням и даёт множитель', () => {

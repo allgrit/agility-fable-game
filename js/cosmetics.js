@@ -5,7 +5,7 @@
 export const RARITY = {
   common:    { name: 'Обычный',     bones: 150 },
   rare:      { name: 'Редкий',      bones: 500 },
-  epic:      { name: 'Эпический',   bones: 1500, rosettes: 4 },
+  epic:      { name: 'Эпический',   bones: 1500, rosettes: 2 },
   legendary: { name: 'Легендарный', rosettes: 10 },
 };
 
@@ -45,9 +45,36 @@ export const ITEMS = [
   // --- Эффект финиша (slot: finish) ---
   { id: 'finish-fireworks', slot: 'finish', name: 'Фейерверк', rarity: 'rare', finish: 'fireworks' },
   { id: 'finish-golden', slot: 'finish', name: 'Золотой дождь', rarity: 'epic', finish: 'golden' },
+
+  // --- Волна 2 каталога ---
+  { id: 'coat-border-tri', slot: 'coat', breed: 'border', name: 'Триколор бордер', rarity: 'common',
+    palette: { body: '#2b2b30', chest: '#f5f0e8', ear: '#1c1c20', tan: '#b5763a' } },
+  { id: 'coat-sheltie-merle', slot: 'coat', breed: 'sheltie', name: 'Блю-мерль шелти', rarity: 'epic',
+    palette: { body: '#9aa3ad', chest: '#f7f5f0', ear: '#2e3238', merle: '#3a3f46' } },
+  { id: 'coat-jack-lemon', slot: 'coat', breed: 'jack', name: 'Лимонный джек', rarity: 'common',
+    palette: { body: '#f5eccb', chest: '#ffffff', ear: '#e0c26a' } },
+  { id: 'coat-aussie-black', slot: 'coat', breed: 'aussie', name: 'Блэк-три Хлоя', rarity: 'rare',
+    palette: { body: '#26262c', chest: '#f7f5f0', ear: '#17171c', merle: '#101014', tan: '#c98a4b' } },
+  { id: 'coat-poodle-apricot', slot: 'coat', breed: 'poodle', name: 'Абрикосовый пудель', rarity: 'rare',
+    palette: { body: '#d9a06b', chest: '#e8bb8a', ear: '#c08850', curly: '#e0ad7a' } },
+  { id: 'neck-bandana-green', slot: 'neck', name: 'Зелёная бандана', rarity: 'common',
+    neck: { kind: 'bandana', color: '#4caf6d' } },
+  { id: 'neck-bandana-black', slot: 'neck', name: 'Чёрная бандана', rarity: 'common',
+    neck: { kind: 'bandana', color: '#26262c' } },
+  { id: 'neck-collar-spike', slot: 'neck', name: 'Ошейник с шипами', rarity: 'rare',
+    neck: { kind: 'collar', color: '#c0c4c8' } },
+  { id: 'paws-pink', slot: 'paws', name: 'Розовые следы', rarity: 'common', paws: '#f48fb1' },
+  { id: 'paws-ember', slot: 'paws', name: 'Огненные следы', rarity: 'rare', paws: '#ff7043' },
+  { id: 'finish-hearts', slot: 'finish', name: 'Сердечки', rarity: 'rare', finish: 'hearts' },
+  { id: 'handler-blue', slot: 'handler', name: 'Хендлер: синяя форма', rarity: 'common',
+    shirt: '#3b6fd4' },
+  { id: 'handler-gold', slot: 'handler', name: 'Хендлер: форма чемпионата', rarity: 'epic',
+    shirt: '#c9a227' },
+  { id: 'ring-beach', slot: 'ring', name: 'Ринг: пляж', rarity: 'legendary',
+    theme: { outer: '#c8b077', grass: '#dbc389', stripeAlpha: 0.05, overlay: 'rgba(255,220,150,0.10)', lights: false } },
 ];
 
-export const SLOT_NAMES = { coat: 'Окрас', neck: 'Шея', paws: 'Следы', finish: 'Финиш' };
+export const SLOT_NAMES = { coat: 'Окрас', neck: 'Шея', paws: 'Следы', finish: 'Финиш', handler: 'Хендлер', ring: 'Ринг' };
 
 export function itemById(id) { return ITEMS.find(i => i.id === id); }
 
@@ -82,5 +109,9 @@ export function applyEquip(breed, equip, owned) {
   if (paws) b = { ...b, pawColor: paws.paws };
   const fin = equip.finish && owned[equip.finish] && itemById(equip.finish);
   if (fin) b = { ...b, finishFx: fin.finish };
+  const hand = equip.handler && owned[equip.handler] && itemById(equip.handler);
+  if (hand) b = { ...b, handlerShirt: hand.shirt };
+  const ring = equip.ring && owned[equip.ring] && itemById(equip.ring);
+  if (ring) b = { ...b, ringTheme: ring.theme };
   return b;
 }

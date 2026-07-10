@@ -150,6 +150,20 @@ const breedList = Object.values(BREEDS);
 const breedLocked = (b) => b.unlockAch && !hasAch(b.unlockAch);
 const toasts = []; // {icon, name, desc, t}
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
+// Настройки (доступность и громкости)
+const settings = (() => {
+  try { return { shake: true, colorblind: false, oneButton: false, music: 0.6, sfx: 0.6,
+    ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
+  catch { return { shake: true, colorblind: false, oneButton: false, music: 0.6, sfx: 0.6 }; }
+})();
+function saveSettings() {
+  try { localStorage.setItem('agility_settings', JSON.stringify(settings)); } catch {}
+  renderer.shakeScale = settings.shake ? 1 : 0;
+  renderer.colorblind = settings.colorblind;
+  if (audio.music) audio.music.bus.gain.value = 0.3 * settings.music / 0.6;
+  if (audio.master && !audio.muted) audio.master.gain.value = 0.55 * settings.sfx / 0.6;
+}
+
 // Мета-прогрессия: единое состояние валют/XP/заданий
 const meta = loadMeta();
 {
@@ -173,6 +187,7 @@ function resize() {
 window.addEventListener('resize', resize);
 window.visualViewport?.addEventListener('resize', resize);
 resize();
+saveSettings();
 
 const isPortrait = () => canvas.height > canvas.width;
 function evXY(e) {
@@ -232,6 +247,10 @@ function questsZone() {
   const z = Math.min(canvas.width, canvas.height) / 700;
   return { x: canvas.width - 34 * z, y: 390 * z, r: 26 * z };
 }
+function settingsZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 455 * z, r: 26 * z };
+}
 
 // Полноэкранный режим (недоступен на iPhone — там прячем кнопку).
 const FS_SUPPORTED = !!(document.documentElement.requestFullscreen);
@@ -264,7 +283,12 @@ window.addEventListener('keydown', (e) => {
     audio.click();
     return;
   }
-  if (app.state === 'board' || app.state === 'shop' || app.state === 'quests') {
+  if (e.code === 'KeyO' && app.state !== 'run') {
+    app.state = app.state === 'settings' ? 'menu' : 'settings';
+    audio.click();
+    return;
+  }
+  if (app.state === 'board' || app.state === 'shop' || app.state === 'quests' || app.state === 'settings') {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
     return;
   }
@@ -278,11 +302,22 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.code === 'Escape') return toMenu();
     if (e.code === 'KeyR') return startRun();
-    app.run.input(e.code, true);
+    let code = e.code;
+    if (settings.oneButton && KEYS.includes(code)) {
+      const exp = expectedKey(app.run);
+      if (exp) code = exp;
+    }
+    keyRemap.set(e.code, code); // чтобы keyup отпускал ту же подменённую клавишу
+    app.run.input(code, true);
   }
 });
+const keyRemap = new Map(); // e.code → фактически отправленная клавиша (режим одной кнопки)
 window.addEventListener('keyup', (e) => {
-  if (app.state === 'run') app.run.input(e.code, false);
+  if (app.state === 'run') {
+    const code = keyRemap.get(e.code) || e.code;
+    keyRemap.delete(e.code);
+    app.run.input(code, false);
+  }
 });
 // iOS: гасим системные жесты — выделение, лупу, контекстное меню, двойной тап.
 canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
@@ -312,14 +347,23 @@ canvas.addEventListener('pointerdown', (e) => {
       if (dd < bestD) { bestD = dd; best = b; }
     }
     if (best && bestD <= best.r * 2.4) {
-      touchPointers.set(e.pointerId, best.code);
-      app.run.input(best.code, true);
+      let code = best.code;
+      if (settings.oneButton) {
+        const exp = expectedKey(app.run);
+        if (exp) code = exp;
+      }
+      touchPointers.set(e.pointerId, code);
+      app.run.input(code, true);
     }
     return;
   }
   if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
   if (app.state === 'shop') {
     if (!handleShopTap(p)) { app.state = 'menu'; audio.click(); }
+    return;
+  }
+  if (app.state === 'settings') {
+    if (!handleSettingsTap(p)) { app.state = 'menu'; audio.click(); }
     return;
   }
   const tz = trophyZone();
@@ -333,6 +377,10 @@ canvas.addEventListener('pointerdown', (e) => {
   const qz = questsZone();
   if (app.state === 'menu' && Math.hypot(p.x - qz.x, p.y - qz.y) < qz.r) {
     app.state = 'quests'; audio.click(); return;
+  }
+  const stz = settingsZone();
+  if (app.state === 'menu' && Math.hypot(p.x - stz.x, p.y - stz.y) < stz.r) {
+    app.state = 'settings'; audio.click(); return;
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
   if (app.state === 'menu' && inZone(app.chloeZoneMenu)) return openChloe();
@@ -462,6 +510,12 @@ function startRun() {
   }
   // Первый запуск: разминка во «Дворе» — 3 снаряда, провалить нельзя
   if (!localStorage.getItem('agility_onboarded')) return startWarmup();
+  // Смена дня в живой сессии: пересоздать daily/weekly-задания
+  {
+    const d = new Date();
+    refreshQuests(meta, d.toDateString(), d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate());
+    saveMeta(meta);
+  }
   let course;
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
@@ -479,6 +533,7 @@ function startRun() {
   const mod = MODIFIERS[activeModifier()];
   renderer.theme = pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
   const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
+  if (dressed.ringTheme) renderer.theme = dressed.ringTheme;
   app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
     modifier: activeModifier(), windowMul: mod.windowMul || 1 });
   renderer.cam.x = course.start.x;
@@ -878,6 +933,21 @@ function drawQuests() {
   ctx.fillText('НЕДЕЛЯ (сброс в понедельник)', px + 28 * z, py + 240 * z);
   (meta.quests.weekly || []).forEach((st, i) => row(st, py + (266 + i * 44) * z));
 
+  // Календарь трассы дня: 30 клеток, заполненные — дни серии
+  const calY = py + 358 * z;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`СЕРИЯ ТРАССЫ ДНЯ: ${meta.streak.count} дн (множитель ×${streakMult(meta.streak.count)})`, px + 28 * z, calY - 12 * z);
+  for (let i = 0; i < 30; i++) {
+    const cxq = px + 28 * z + (i % 15) * 18 * z;
+    const cyq = calY + Math.floor(i / 15) * 18 * z;
+    const filled = i < Math.min(30, meta.streak.count);
+    ctx.beginPath();
+    ctx.fillStyle = filled ? '#ffd54a' : 'rgba(255,255,255,0.15)';
+    ctx.arc(cxq, cyq, 6 * z, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffe9a8';
   ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
@@ -885,6 +955,75 @@ function drawQuests() {
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.fillText('J / ESC / тап — назад', w / 2, py + ph - 18 * z);
   ctx.restore();
+}
+
+// ---------- НАСТРОЙКИ (доступность) ----------
+function settingsRows(px, py, pw, z) {
+  return [
+    { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
+    { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
+    { id: 'oneButton', name: 'Режим одной кнопки (все QTE — ХОП)', kind: 'toggle', y: py + 190 * z },
+    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 250 * z },
+    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 305 * z },
+  ];
+}
+
+function drawSettings() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.85)';
+  ctx.fillRect(0, 0, w, h);
+  const pw = Math.min(520 * z, w * 0.94), ph = Math.min(420 * z, h * 0.9);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  panel(ctx, px, py, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('⚙ Настройки', w / 2, py + 40 * z);
+  app.settingsRows = settingsRows(px, py, pw, z).map(r => ({ ...r, px, pw }));
+  for (const r of app.settingsRows) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(r.name, px + 28 * z, r.y);
+    if (r.kind === 'toggle') {
+      const on = !!settings[r.id];
+      const tx = px + pw - 84 * z, ty = r.y - 13 * z;
+      ctx.fillStyle = on ? '#4caf6d' : 'rgba(255,255,255,0.2)';
+      ctx.beginPath(); ctx.roundRect(tx, ty, 52 * z, 22 * z, 11 * z); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(tx + (on ? 40 : 12) * z, ty + 11 * z, 8.5 * z, 0, Math.PI * 2); ctx.fill();
+      r.hit = { x: tx - 8, y: ty - 8, w: 52 * z + 16, h: 22 * z + 16 };
+    } else {
+      const sx = px + 28 * z, sw = pw - 56 * z, sy = r.y + 12 * z;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(sx, sy, sw, 8 * z);
+      ctx.fillStyle = '#ffd54a';
+      ctx.fillRect(sx, sy, sw * settings[r.id], 8 * z);
+      ctx.beginPath(); ctx.arc(sx + sw * settings[r.id], sy + 4 * z, 9 * z, 0, Math.PI * 2); ctx.fill();
+      r.hit = { x: sx - 10, y: sy - 14 * z, w: sw + 20, h: 30 * z, sx, sw };
+    }
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('O / ESC / тап мимо — назад', w / 2, py + ph - 20 * z);
+  ctx.restore();
+}
+
+function handleSettingsTap(p) {
+  for (const r of app.settingsRows || []) {
+    const hh = r.hit;
+    if (hh && p.x >= hh.x && p.x <= hh.x + hh.w && p.y >= hh.y && p.y <= hh.y + hh.h) {
+      if (r.kind === 'toggle') settings[r.id] = !settings[r.id];
+      else settings[r.id] = Math.max(0, Math.min(1, (p.x - hh.sx) / hh.sw));
+      saveSettings();
+      audio.click();
+      return true;
+    }
+  }
+  return false;
 }
 
 // ---------- ЭКРАН ЛИДЕРБОРДА ----------
@@ -934,26 +1073,31 @@ function drawBoard() {
   }
   // Достижения: сетка под таблицей
   const ach = loadAch();
-  const cols = isPortrait() ? 2 : 5;
+  const cols = isPortrait() ? 3 : 6;
   const cellW = (pw - 40 * z) / cols;
-  const startY = py + ph - 26 * z - Math.ceil(ACHIEVEMENTS.length / cols) * 34 * z - 16 * z;
+  const startY = py + ph - 26 * z - Math.ceil(ACHIEVEMENTS.length / cols) * 26 * z - 12 * z;
   ctx.textAlign = 'left';
   ACHIEVEMENTS.forEach((a, i) => {
     const col = i % cols, row = Math.floor(i / cols);
     const ax = px + 24 * z + col * cellW;
-    const ay = startY + row * 34 * z;
+    const ay = startY + row * 26 * z;
     const got = !!ach[a.id];
-    ctx.globalAlpha = got ? 1 : 0.35;
-    ctx.font = `${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.globalAlpha = got ? 1 : 0.32;
+    ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#fff';
     ctx.fillText(got ? a.icon : '🔒', ax, ay);
     ctx.fillStyle = got ? '#ffe9a8' : 'rgba(255,255,255,0.6)';
-    ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(a.name, ax + 24 * z, ay - 4 * z);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = `${Math.round(9 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(a.desc.slice(0, 30), ax + 24 * z, ay + 8 * z);
+    ctx.font = `${Math.round(10 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(a.name.slice(0, 20), ax + 20 * z, ay);
   });
+  // Ранг хендлера: сумма уровней всех собак
+  const sumLv = Object.values(meta.dogs).reduce((acc, d) => acc + (d.level || 1), 0);
+  const rank = sumLv >= 50 ? 'Легенда ринга' : sumLv >= 25 ? 'Судья FCI' : sumLv >= 10 ? 'Инструктор' : 'Новичок';
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8fd8ff';
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`Ранг хендлера: ${rank} (Σ уровней ${sumLv})`, w / 2, startY - 10 * z);
   ctx.globalAlpha = 1;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -1002,6 +1146,7 @@ function drawTrophyIcon() {
     [trophyZone(), '🏆', null],
     [shopZone(), '🛍', null],
     [questsZone(), '📋', qDone < 3 ? `${qDone}/3` : '✓'],
+    [settingsZone(), '⚙️', null],
   ]) {
     ctx.fillStyle = 'rgba(10,20,15,0.55)';
     ctx.beginPath(); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2); ctx.fill();
@@ -1503,6 +1648,7 @@ function drawResults(run, z) {
     // Достижения
     const newly = checkAchievements({
       run, result: app.result, mode: app.mode, cls: app.cls, goldCount: medalCounts()[3],
+      meta, medals: loadMedals(),
     });
     for (const a of newly) {
       toasts.push({ icon: a.icon, name: a.name, desc: a.desc, t: 0 });
@@ -1524,9 +1670,15 @@ function drawResults(run, z) {
         app.newMedal = recordMedal(4) || app.newMedal;
       }
       const trackId = courseKey();
+      const dkey = new Date().toDateString();
+      if (!meta.counters.runsToday || meta.counters.runsToday.day !== dkey) {
+        meta.counters.runsToday = { day: dkey, n: 0 };
+      }
+      meta.counters.runsToday.n += 1;
       const earned = earnFromRun(meta, {
         points: res0.points, stars: Math.min(3, res0.stars), trackId,
         isDaily: app.mode === 'daily', todayStr: todayStr(),
+        runOfDay: meta.counters.runsToday.n,
       });
       // Розетки-вехи: первое золото трассы, чистая ЧМ-трасса
       let ros = 0;
@@ -1752,7 +1904,7 @@ function frame(now) {
   last = now;
   app.t += dt;
 
-  if (app.state === 'menu' || app.state === 'board' || app.state === 'shop' || app.state === 'quests') {
+  if (['menu', 'board', 'shop', 'quests', 'settings'].includes(app.state)) {
     audio.music?.setState('menu');
     drawMenu(dt);
     drawMuteIcon();
@@ -1760,6 +1912,7 @@ function frame(now) {
     if (app.state === 'board') drawBoard();
     if (app.state === 'shop') drawShop();
     if (app.state === 'quests') drawQuests();
+    if (app.state === 'settings') drawSettings();
     drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);

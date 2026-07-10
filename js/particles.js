@@ -64,6 +64,7 @@ export class Particles {
   confettiBurst(x, y, n = 60, preset = null) {
     let colors = ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb', '#ffab40'];
     if (preset === 'golden') colors = ['#ffd54a', '#f4c430', '#fff3b0', '#c9a227'];
+    if (preset === 'hearts') colors = ['#f06292', '#e91e63', '#f8bbd0', '#ff8a80'];
     if (preset === 'fireworks') {
       // три разнесённых залпа искр + обычное конфетти
       for (const [ox, oy] of [[-2.5, -1], [2.5, -1.5], [0, -3]]) this.sparks(x + ox, y + oy, '#ffd54a');

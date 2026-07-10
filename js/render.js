@@ -35,7 +35,7 @@ export class Renderer {
     this.cam.zoomFx = 1 + this._punch;
   }
 
-  shake(power = 0.6) { this.cam.shake = Math.min(1, this.cam.shake + power); }
+  shake(power = 0.6) { this.cam.shake = Math.min(1, this.cam.shake + power * (this.shakeScale ?? 1)); }
   kick(dx, dy) { this._kickX = (this._kickX || 0) + dx; this._kickY = (this._kickY || 0) + dy; }
   zoomPunch(p = 0.06) { this._punch = Math.min(0.12, (this._punch || 0) + p); }
 
@@ -603,13 +603,14 @@ export class Renderer {
       ctx.beginPath(); ctx.moveTo(0, 8);
       ctx.lineTo(Math.sin(sw) * 6, 20); ctx.stroke();
     }
-    // Корпус
-    ctx.fillStyle = '#e05561';
+    // Корпус (цвет формы — из экипировки)
+    const shirt = h.shirt || '#e05561';
+    ctx.fillStyle = shirt;
     ctx.beginPath();
     ctx.roundRect(-6, -8, 12, 17, 5);
     ctx.fill();
     // Руки (жестикуляция при команде)
-    ctx.strokeStyle = '#e05561'; ctx.lineWidth = 3.6;
+    ctx.strokeStyle = shirt; ctx.lineWidth = 3.6;
     const cmdArm = h.commanding ? -1.9 + Math.sin(this.time * 16) * 0.15 : Math.sin(run) * 0.7;
     ctx.beginPath(); ctx.moveTo(4, -5); ctx.lineTo(4 + Math.cos(cmdArm) * 9, -5 + Math.sin(cmdArm) * 9); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-4, -5); ctx.lineTo(-4 - Math.cos(run) * 5, -5 + Math.sin(run + Math.PI) * 6); ctx.stroke();

@@ -2,21 +2,21 @@
 // ISO-недели (сброс в понедельник). Прогресс в agility_meta.quests.
 
 export const DAILY_POOL = [
-  { id: 'runs3',    name: 'Пройди 3 трассы',            target: 3,  bones: 30, ev: 'run' },
-  { id: 'perf20',   name: '20 идеальных нажатий',        target: 20, bones: 30, ev: 'perfect' },
-  { id: 'clean1',   name: 'Чистый прогон (Q)',           target: 1,  bones: 40, ev: 'clean' },
-  { id: 'combo10',  name: 'Комбо ×10 за один забег',     target: 1,  bones: 30, ev: 'combo10' },
-  { id: 'daily1',   name: 'Пробеги трассу дня',          target: 1,  bones: 40, ev: 'daily' },
-  { id: 'obst25',   name: 'Пройди 25 снарядов',          target: 25, bones: 30, ev: 'obstacle' },
-  { id: 'medal1',   name: 'Возьми любую медаль',         target: 1,  bones: 30, ev: 'medal' },
-  { id: 'tunnel6',  name: '6 туннелей за день',          target: 6,  bones: 30, ev: 'tunnel' },
+  { id: 'runs3',    name: 'Пройди 3 трассы',            target: 3,  bones: 50, ev: 'run' },
+  { id: 'perf20',   name: '20 идеальных нажатий',        target: 20, bones: 40, ev: 'perfect' },
+  { id: 'clean1',   name: 'Чистый прогон (Q)',           target: 1,  bones: 50, ev: 'clean' },
+  { id: 'combo10',  name: 'Комбо ×10 за один забег',     target: 1,  bones: 40, ev: 'combo10' },
+  { id: 'daily1',   name: 'Пробеги трассу дня',          target: 1,  bones: 60, ev: 'daily' },
+  { id: 'obst25',   name: 'Пройди 25 снарядов',          target: 25, bones: 40, ev: 'obstacle' },
+  { id: 'medal1',   name: 'Возьми любую медаль',         target: 1,  bones: 40, ev: 'medal' },
+  { id: 'tunnel6',  name: '6 туннелей за день',          target: 6,  bones: 40, ev: 'tunnel' },
 ];
 
 export const WEEKLY_POOL = [
-  { id: 'wcleans5', name: '5 чистых прогонов за неделю', target: 5,  bones: 150, rosettes: 2, ev: 'clean' },
-  { id: 'wruns12',  name: '12 трасс за неделю',          target: 12, bones: 120, rosettes: 2, ev: 'run' },
-  { id: 'wgold2',   name: '2 золотые медали',            target: 2,  bones: 150, rosettes: 3, ev: 'gold' },
-  { id: 'wdaily3',  name: '3 трассы дня за неделю',      target: 3,  bones: 120, rosettes: 2, ev: 'daily' },
+  { id: 'wcleans5', name: '5 чистых прогонов за неделю', target: 5,  bones: 150, rosettes: 1, ev: 'clean' },
+  { id: 'wruns12',  name: '12 трасс за неделю',          target: 12, bones: 120, rosettes: 1, ev: 'run' },
+  { id: 'wgold2',   name: '2 золотые медали',            target: 2,  bones: 150, rosettes: 2, ev: 'gold' },
+  { id: 'wdaily3',  name: '3 трассы дня за неделю',      target: 3,  bones: 120, rosettes: 1, ev: 'daily' },
 ];
 
 function seededPick(pool, count, seed) {
@@ -94,11 +94,21 @@ export function claimDone(meta) {
   }
   // Бонус «все 3 daily»
   const d = meta.quests.daily || [];
+  if (meta.quests.dailyBonus && meta.quests.dailyBonus !== meta.quests.day) {
+    meta.quests.dailyBonus = null; // сброс метки прошлого дня ДО проверки
+  }
   if (d.length === 3 && d.every(s => s.done) && !meta.quests.dailyBonus) {
     meta.quests.dailyBonus = meta.quests.day;
     bones += 50;
-  } else if (meta.quests.dailyBonus && meta.quests.dailyBonus !== meta.quests.day) {
-    meta.quests.dailyBonus = null;
+  }
+  // Бонус «обе weekly»
+  const wl = meta.quests.weekly || [];
+  if (meta.quests.weeklyBonus && meta.quests.weeklyBonus !== meta.quests.week) {
+    meta.quests.weeklyBonus = null;
+  }
+  if (wl.length === 2 && wl.every(s => s.done) && !meta.quests.weeklyBonus) {
+    meta.quests.weeklyBonus = meta.quests.week;
+    bones += 50;
   }
   meta.bones += bones;
   meta.rosettes += rosettes;

@@ -51,10 +51,15 @@ export function streakMult(count) {
 
 const MEDAL_BONUS = { 1: 5, 2: 10, 3: 20 };
 
-export function earnFromRun(meta, { points, stars, trackId, isDaily, todayStr }) {
+export function earnFromRun(meta, { points, stars, trackId, isDaily, todayStr, runOfDay = 0 }) {
   const detail = [];
-  let bones = Math.round(points / 100);
+  let bones = Math.round(points / 90);
   if (bones > 0) detail.push([`очки`, bones]);
+  // Бонус активности: 5-й и 10-й прогоны дня
+  if (runOfDay === 5 || runOfDay === 10) {
+    bones += 20;
+    detail.push([`${runOfDay}-й прогон дня`, 20]);
+  }
 
   const paid = meta.medalPaid[trackId] || 0;
   if (stars > paid) {
