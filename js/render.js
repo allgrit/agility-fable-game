@@ -266,6 +266,42 @@ export class Renderer {
         }
         break;
       }
+      case 'spread': case 'triple': {
+        // Двойной/тройной барьер: планки каскадом по ходу движения, задняя выше.
+        const nBars = o.type === 'triple' ? 3 : 2;
+        const wsp = 0.8;
+        this._shadow(o.x, o.y, 1.0);
+        for (const side of [-1, 1]) {
+          this._pole(o.x - dx * o.len / 2 + px * wsp * side, o.y - dy * o.len / 2 + py * wsp * side,
+            0.95, '#c94f7c', 0.1);
+          this._pole(o.x + dx * o.len / 2 + px * wsp * side, o.y + dy * o.len / 2 + py * wsp * side,
+            0.95, '#c94f7c', 0.1);
+        }
+        for (let k = 0; k < nBars; k++) {
+          const t = (k / Math.max(1, nBars - 1) - 0.5) * o.len;
+          const cx = o.x + dx * t, cy = o.y + dy * t;
+          const hgt = state.knocked ? 0.08 : 0.42 + k * 0.22; // каскад: задняя выше
+          this._barLine(cx - px * wsp, cy - py * wsp, cx + px * wsp, cy + py * wsp,
+            hgt, k === nBars - 1 ? '#e05555' : '#f0ede4', 0.1);
+        }
+        break;
+      }
+      case 'serpentine': {
+        // Веер из 4 коротких барьеров: наклон чередуется — читается змейка.
+        this._shadow(o.x, o.y, o.len / 2);
+        for (let k = 0; k < 4; k++) {
+          const t = (k / 3 - 0.5) * o.len;
+          const cx = o.x + dx * t, cy = o.y + dy * t;
+          const tilt = (k % 2 ? 1 : -1) * 0.45; // поворот планки относительно оси
+          const bx = px * Math.cos(tilt) - py * Math.sin(tilt);
+          const by = px * Math.sin(tilt) + py * Math.cos(tilt);
+          this._pole(cx - bx * 0.7, cy - by * 0.7, 0.8, k % 2 ? '#4b8bd4' : '#e08a3c', 0.09);
+          this._pole(cx + bx * 0.7, cy + by * 0.7, 0.8, k % 2 ? '#4b8bd4' : '#e08a3c', 0.09);
+          this._barLine(cx - bx * 0.7, cy - by * 0.7, cx + bx * 0.7, cy + by * 0.7,
+            0.5, state.knocked ? 'rgba(240,237,228,0.4)' : '#f0ede4', 0.08);
+        }
+        break;
+      }
       case 'aframe': {
         const z = this.cam.zoom;
         this._shadow(o.x, o.y, 1.6);

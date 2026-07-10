@@ -128,6 +128,32 @@ export class AudioEngine {
     this._osc('triangle', 800 + (i % 2) * 220, this.ctx.currentTime, 0.07, 0.15);
   }
 
+  // ---- V4 ----
+  // Метроном groove: тик планируется точно в WebAudio-времени (delay сек вперёд),
+  // высота чередуется по стороне удара — слышно «лево-право».
+  metroTick(delay, side) {
+    if (!this.ctx) return;
+    this._osc('square', side ? 1180 : 880, this.ctx.currentTime + delay, 0.05, 0.2);
+  }
+
+  // Судья считает у стола: короткий деревянный стук на каждую секунду
+  judgeCount(n) {
+    if (!this.ctx) return;
+    this._osc('square', 340 + n * 30, this.ctx.currentTime, 0.07, 0.16, null, 220);
+  }
+
+  // Сигнал GO после выдержки — резкий яркий свисток
+  goSignal() {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    this._osc('square', 1500, t, 0.16, 0.24, null, 1900);
+  }
+
+  // Заряд spread/triple: восходящий тон, пока копится дуга
+  chargeSound() {
+    if (!this.ctx) return;
+    this._osc('sawtooth', 220, this.ctx.currentTime, 0.85, 0.10, null, 720);
+  }
+
   perfect() {
     if (!this.ctx) return; const t = this.ctx.currentTime;
     this._osc('sine', 880, t, 0.1, 0.18);
@@ -198,6 +224,8 @@ export class AudioEngine {
       case 'aframe': case 'dogwalk': cry(220, 380, 0, 0.3, 0.18); break;          // восходящий «Вверх!»
       case 'seesaw': cry(300, 240, 0, 0.14); cry(240, 300, 0.16, 0.14); break;    // качающийся
       case 'table': cry(320, 320, 0, 0.08); cry(260, 260, 0.14, 0.14); break;     // стаккато «Стол. Ждать»
+      case 'spread': case 'triple': cry(260, 500, 0, 0.24, 0.2); break;           // нарастающий «Заря-я-яд!»
+      case 'serpentine': cry(360, 300, 0, 0.09); cry(300, 360, 0.11, 0.09); cry(360, 300, 0.22, 0.09); break; // виляющий
       default: this.bark(1);
     }
   }

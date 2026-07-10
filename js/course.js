@@ -5,15 +5,20 @@ export const FIELD = { w: 52, h: 36, margin: 4 };
 
 // windowMul — множитель окна реакции: новичкам заметно легче, мастерам строже.
 // Механики вводятся постепенно: Novice — только прыжки и туннели,
-// Open — + слалом и горка/бум, Excellent — + качели и стол.
+// Open — + слалом и горка/бум, Excellent — + качели, стол, spread, серпантин,
+// Masters — + triple.
 export const CLASSES = {
   novice:    { name: 'Novice',    count: 12, contacts: 0, weave: false, table: false, seesaw: false,
+               spread: false, serpentine: false, triple: false,
                dogSpeed: 4.2, sctSpeed: 3.0, windowMul: 1.45 },
   open:      { name: 'Open',      count: 14, contacts: 1, weave: true, table: false, seesaw: false,
+               spread: false, serpentine: false, triple: false,
                dogSpeed: 4.8, sctSpeed: 3.5, windowMul: 1.2 },
   excellent: { name: 'Excellent', count: 16, contacts: 2, weave: true, table: true, seesaw: true,
+               spread: true, serpentine: true, triple: false,
                dogSpeed: 5.4, sctSpeed: 4.0, windowMul: 1.0 },
   masters:   { name: 'Masters',   count: 18, contacts: 2, weave: true, table: true, seesaw: true,
+               spread: true, serpentine: true, triple: true,
                dogSpeed: 5.8, sctSpeed: 4.4, windowMul: 0.9 },
 };
 
@@ -29,12 +34,17 @@ export const OBSTACLES = {
   dogwalk: { len: 8.6, gap: [6, 8],     label: 'Бум' },
   seesaw:  { len: 4.4, gap: [6, 8],     label: 'Качели' },
   table:   { len: 1.2, gap: [5.5, 7.5], label: 'Стол' },
+  spread:  { len: 0.9, gap: [6.5, 9],   label: 'Двойной барьер' },
+  triple:  { len: 1.4, gap: [7, 9.5],   label: 'Тройной барьер' },
+  serpentine: { len: 6.0, gap: [5.5, 7.5], label: 'Серпантин' },
 };
 
 export const CONTACT_TYPES = ['aframe', 'dogwalk', 'seesaw'];
 
 // Список типов снарядов для класса с учётом правил (слалом x1, шина <=1, стол <=1).
 function buildTypeList(rng, cls, variant) {
+  // Тест-драйв/спецтрассы: точный состав снарядов в заданном порядке
+  if (variant.forceTypes) return [...variant.forceTypes];
   const c = { ...CLASSES[cls], ...variant };
   const types = [];
   const contacts = CONTACT_TYPES.filter(t => c.seesaw || t !== 'seesaw');
@@ -46,6 +56,9 @@ function buildTypeList(rng, cls, variant) {
   if (rng.chance(0.55)) types.push('tunnel');
   if (rng.chance(0.6)) types.push('tire');
   if (c.table && rng.chance(0.5)) types.push('table');
+  if (c.spread && rng.chance(0.55)) types.push('spread');
+  if (c.serpentine && rng.chance(0.45)) types.push('serpentine');
+  if (c.triple && rng.chance(0.5)) types.push('triple');
   if (rng.chance(0.45)) types.push('wall');
   if (rng.chance(0.4)) types.push('broad');
   while (types.length < c.count) types.push('jump');
@@ -168,6 +181,9 @@ export function validateCourse(course) {
   if ((counts.tire || 0) > 1) errs.push('tire > 1');
   if ((counts.table || 0) > (cc.table ? 1 : 0)) errs.push('table not allowed / > 1');
   if (!cc.seesaw && (counts.seesaw || 0) > 0) errs.push('seesaw not allowed');
+  if (!cc.spread && (counts.spread || 0) > 0) errs.push('spread not allowed');
+  if (!cc.triple && (counts.triple || 0) > 0) errs.push('triple not allowed');
+  if ((counts.serpentine || 0) > (cc.serpentine ? 1 : 0)) errs.push('serpentine not allowed / > 1');
   const nContacts = CONTACT_TYPES.reduce((s, t) => s + (counts[t] || 0), 0);
   if (nContacts < cc.contacts) errs.push('not enough contact obstacles');
   if (cc.contacts === 0 && nContacts > 0) errs.push('contacts not allowed');

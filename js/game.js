@@ -1,22 +1,30 @@
 // Оркестратор забега: собака на сплайне, QTE у снарядов, судейство, камера, эффекты.
 import { Path } from './spline.js';
-import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE } from './qte.js';
-import { computeSct } from './scoring.js';
+import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
+import { computeSct, BREEDS } from './scoring.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
-const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel']);
+const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
+  'spread', 'triple', 'serpentine']);
 
 // Обучающие подсказки: первая встреча со сложной механикой — slow-mo + инструкция.
 export const HINTS = {
-  weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО попеременно — в ритм подсветке!',
+  tunnel:  'ТУННЕЛЬ: жми НИЗ на подлёте ко входу!',
+  weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО в ритм метронома — стойки-ноты едут к линии удара!',
   aframe:  'ГОРКА: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
   dogwalk: 'БУМ: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
   seesaw:  'КАЧЕЛИ: ВЕРХ на заходе, потом ХОП, когда доска опустится!',
-  table:   'СТОЛ: зажми ХОП и держи, пока шкала не заполнится!',
+  table:   'СТОЛ: ХОП на заходе, потом ЗАМРИ — не трогай кнопки, пока судья считает. По сигналу GO — ХОП!',
+  tire2:   'ШИНА: ХОП на подлёте и ЕЩЁ раз в верхней точке полёта!',
+  spread:  'ЗАРЯД: зажми ХОП на подлёте и отпусти в жёлтом секторе дуги!',
+  triple:  'ТРОЙНОЙ: как заряд, но сектор уже — целься точнее!',
+  serpentine: 'СЕРПАНТИН: стрелки раскрываются на подлёте — жми сторону в темп!',
 };
 
 export class Run {
-  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1 }) {
+  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1, audioOffset = 0 }) {
+    this.audioOffset = audioOffset; // калибровка задержки звука для groove (сек)
+    this.bonusPoints = 0;           // событийные бонусы очков (Golden Weave и т.п.)
     this.course = course;
     this.breed = breed;
     this.modifier = modifier;
@@ -60,12 +68,59 @@ export class Run {
     this._stepAcc = 0;
     this.hintText = null; // обучающая подсказка при первой встрече механики
     this.hintSlow = 0;    // сек оставшегося slow-mo
+    // Late-commit: фокусы риска. Заявка до окна → окно сжимается до 35% ширины,
+    // бонусные очки за успех, промах = 5 фолтов.
+    const maxFocus = 3 + (breed.ability === 'drive' ? 1 : 0);
+    this.focus = { count: maxFocus, max: maxFocus, used: 0, perfectsSince: 0, regens: 0 };
+    this._stubbornUsed = false; // джек: один сейв комбо за прогон
+  }
+
+  // Заявка риска на текущий press-снаряд: только ДО открытия окна.
+  tryRisk() {
+    if (this.phase !== 'running' || this.focus.count <= 0) return false;
+    const m = this.activeMark;
+    if (!m || !m.qte || m.qte.state !== 'active' || m.risk) return false;
+    if (m.qte.def.kind !== 'press' && m.qte.def.kind !== 'doubleTap') return false;
+    const t = this.time - m.qteStart;
+    if (t >= m.qte.target - m.qte.w) return false; // окно уже открыто — поздно
+    m.risk = true;
+    this.focus.count--;
+    this.focus.used++;
+    m.qte.w *= 0.35; // окно сжимается до 35% ширины (симметрично вокруг цели)
+    this.popups.push({ text: '⚡ РИСК ×2!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+    this.audio.reveal();
+    this.emit({ type: 'risk' });
+    return true;
   }
 
   emit(e) { this.events.push(e); }
   drainEvents() { const e = this.events; this.events = []; return e; }
 
   get activeMark() { return this.activeIdx >= 0 ? this.marks[this.activeIdx] : null; }
+
+  // Опции QTE по типу снаряда: прогрессия механик и параметры V4.
+  _qteOpts(type) {
+    const cls = this.course.cls;
+    const opts = { windowScale: this.windowScale };
+    if (type === 'tire') {
+      // Double-tap шины — механика Excellent+; раньше это обычный тап
+      opts.noApex = cls === 'novice' || cls === 'open';
+    }
+    if (type === 'table') {
+      // Фейк-паузы судьи: с Open одна, с Masters до двух
+      const n = cls === 'masters' ? 2 : cls === 'novice' ? 0 : 1;
+      opts.fakePauses = Array.from({ length: n }, (_, i) => ({
+        at: 1.0 + i * 2.0 + Math.random() * 1.2, dur: 0.35 + Math.random() * 0.25,
+      }));
+    }
+    if (type === 'weave') {
+      opts.bpm = GROOVE_BPM[cls] || 112;
+      opts.grooveWindows = GROOVE_WINDOWS[cls] || GROOVE_WINDOWS.open;
+      opts.accelEvery = this.breed.ability === 'groove' ? 3 : 4;
+      opts.audioOffset = this.audioOffset || 0;
+    }
+    return opts;
+  }
 
   baseSpeed() {
     return this.course.class.dogSpeed * this.breed.speedMul;
@@ -76,6 +131,7 @@ export class Run {
   // ---------- ВВОД ----------
   input(key, isDown) {
     if (this.phase !== 'running') return;
+    if ((key === 'ShiftLeft' || key === 'ShiftRight') && isDown) { this.tryRisk(); return; }
     // Финишный mash-спурт: после последнего снаряда ←→ попеременно = рывок
     if (this.sprint.active && isDown && (key === 'ArrowLeft' || key === 'ArrowRight')) {
       if (this.sprint.lastKey && this.sprint.lastKey !== key) {
@@ -96,9 +152,12 @@ export class Run {
 
   // ---------- ЦИКЛ ----------
   update(dt) {
-    if (this.hitstop > 0) { this.hitstop -= dt; dt *= 0.15; }
-    if (this.hintSlow > 0) { this.hintSlow -= dt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
-    if (this.slowmoT > 0) { this.slowmoT -= dt; dt *= 0.5; }
+    // Таймеры слоу-мо тают по РЕАЛЬНОМУ dt — иначе перекрывающиеся эффекты
+    // (hitstop + hint + slowmo) растягивали друг друга в разы
+    const rawDt = dt;
+    if (this.hitstop > 0) { this.hitstop -= rawDt; dt *= 0.15; }
+    if (this.hintSlow > 0) { this.hintSlow -= rawDt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
+    if (this.slowmoT > 0) { this.slowmoT -= rawDt; dt *= 0.5; }
     if (this.desatT > 0) this.desatT -= dt;
     this.time += this.phase === 'running' ? dt : 0;
     this.audio.music?.speedFilter(this.dog.speed);
@@ -141,24 +200,28 @@ export class Run {
         const v = Math.max(d.speed, this.baseSpeed() * 0.6);
         if (d.dist >= nm.entryD - TAKEOFF - lead * v) {
           this.activeIdx = next;
-          nm.qte = new Qte(nm.o.type, { windowScale: this.windowScale });
+          nm.qte = new Qte(nm.o.type, this._qteOpts(nm.o.type));
           nm.qteStart = this.time;
           nm.startDist = d.dist;
           nm.state.active = true;
-          // Первая встреча со сложной механикой: slow-mo + инструкция
-          if (HINTS[nm.o.type]) {
+          // Первая встреча со сложной механикой: slow-mo + инструкция.
+          // Шина до Excellent — простой тап, её double-tap-хинт под ключом tire2.
+          let hintKey = nm.o.type === 'tire' ? (nm.qte.noApex ? null : 'tire2') : nm.o.type;
+          if (hintKey && HINTS[hintKey]) {
             let seen = {};
             try { seen = JSON.parse(localStorage.getItem('agility_hints') || '{}'); } catch {}
-            if (!seen[nm.o.type]) {
-              seen[nm.o.type] = true;
+            if (!seen[hintKey]) {
+              seen[hintKey] = true;
               try { localStorage.setItem('agility_hints', JSON.stringify(seen)); } catch {}
-              this.hintText = HINTS[nm.o.type];
+              this.hintText = HINTS[hintKey];
               this.hintSlow = 2.4;
             }
           }
           // PS-style обманка: только press-QTE, шанс растёт с классом.
           if (nm.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
             nm.decoys = makeDecoys(nm.qte.def.key, this.course.cls);
+            // Шелти: чутьё — обманка раскрывается заметно раньше
+            if (this.breed.ability === 'sense') nm.decoys.reveal *= 1.45;
             nm.decoys.revealAt = nm.qte.target - nm.decoys.reveal;
           }
         }
@@ -185,6 +248,17 @@ export class Run {
         m.decoys.revealed = true;
         this.audio.reveal();
       }
+      // Метроном groove: тик каждого бита шедулится точно в WebAudio-времени
+      // незадолго до бита (lookahead ~0.12с игрового времени).
+      if (m.qte.def.kind === 'groove' && m.qte.state === 'active'
+          && m.qte.nextBeatT !== null && m.qte.beatIdx < m.qte.def.beats) {
+        const tq = this.time - m.qteStart;
+        const eta = m.qte.nextBeatT - tq;
+        if (eta <= 0.12 && m.qte._scheduledBeat !== m.qte.beatIdx + m.qte.restarts * 100) {
+          m.qte._scheduledBeat = m.qte.beatIdx + m.qte.restarts * 100;
+          this.audio.metroTick?.(Math.max(0, eta), m.qte.beatIdx % 2);
+        }
+      }
     }
 
     // Финишный спурт активируется, когда все снаряды пройдены
@@ -198,14 +272,23 @@ export class Run {
     let target = this.baseSpeed() * this.comboMul() * (1 + this.sprint.boost);
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
     if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
-    if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
+    if (m && !m.resolved && m.o.type === 'weave' && m.qte
+        && m.qte.def.kind === 'groove' && m.qte.state === 'active') {
+      // Groove-слалом: собака идёт «стойка-в-бит» — позиция привязана к битам,
+      // визуал и ритм не расходятся. При возврате на 1-ю стойку отбегает назад.
+      const q = m.qte;
+      const beatProgress = Math.min(1, q.beatIdx / q.def.beats);
+      const wantD = m.entryD + beatProgress * (m.exitD - m.entryD);
+      const tq = this.time - m.qteStart;
+      const eta = Math.max(0.15, (q.nextBeatT ?? tq) - tq);
+      target = Math.min(target, Math.max(-2.5, (wantD - d.dist) / eta));
+    } else if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
       // На "синхронных" снарядах не убегаем дальше точки ожидания
       // (градиентное замедление — без ощущения "вкопанной" остановки).
       const waitAt = this._waitPoint(m);
       if (d.dist >= waitAt) target = Math.min(target, 0);
       else if (d.dist >= waitAt - 1.2) target = Math.min(target, 2.0);
       else if (d.dist >= waitAt - 2.0) target = Math.min(target, 3.0);
-      if (m.o.type === 'weave' && d.dist > m.entryD - 0.5) target = Math.min(target, 2.4);
     }
     if (m && m.refusalT > 0) { m.refusalT -= dt; target = 0.4; }
     for (const mm of this.marks) {
@@ -236,6 +319,14 @@ export class Run {
       this.activeIdx = -1;
     }
 
+    // Босс-призрак финишировал раньше нас — толпа ахает
+    if (this.ghost && !this._ghostFinished && this.time >= this.ghost.time) {
+      this._ghostFinished = true;
+      this.audio.gasp();
+      this.popups.push({ text: `${this.ghost.name} на финише!`, color: '#b388ff',
+        x: d.x, y: d.y - 3.2, t: 0 });
+    }
+
     // Финиш
     if (d.dist >= this.path.length - 0.2) {
       this.phase = 'finished';
@@ -258,6 +349,9 @@ export class Run {
       // Туннель: не замираем у входа — собака влетает с ходу и ждёт уже внутри.
       case 'tunnel': return m.entryD + 0.8;
       case 'weave': return m.exitD - 0.4;
+      case 'serpentine': return m.exitD - 0.4;
+      // Заряд: собака приседает у точки отталкивания, копит прыжок
+      case 'spread': case 'triple': return m.entryD - 0.9;
       default: return m.exitD - 0.9; // contact: ждём отпускания у зоны
     }
   }
@@ -284,6 +378,59 @@ export class Run {
         case 'climb':
           this.audio.step();
           break;
+        // --- V4: стол «Замри» ---
+        case 'count':
+          this.audio.judgeCount?.(e.n);
+          this.handler.speech = { text: `${e.n}…`, t: 0, urgency: 0.2 };
+          break;
+        case 'freezeReset':
+          this.audio.miss();
+          this.popups.push({ text: 'Заново!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+          break;
+        case 'go':
+          this.audio.goSignal?.();
+          this.handler.speech = { text: e.text, t: 0, urgency: 1 };
+          this.r.zoomPunch();
+          break;
+        // --- V4: шина double-tap ---
+        case 'takeoff': {
+          this._jumpArc(m);
+          // Апекс — реальная середина дуги при текущей скорости
+          const arcLen = (m.exitD + 1.0) - (m.entryD - TAKEOFF);
+          m.qte.apexDelay = arcLen / 2 / Math.max(this.dog.speed, 1);
+          this.audio.jumpWhoosh();
+          break;
+        }
+        case 'apex':
+          this.slowmoT = 0.28;   // slow-mo кадр апекса
+          this.handler.speech = { text: e.text, t: 0, urgency: 1 };
+          this.popups.push({ text: 'ЕЩЁ!', color: '#8fd8ff', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+          break;
+        // --- V4: чарж-барьер ---
+        case 'chargeStart':
+          this.audio.chargeSound?.();
+          break;
+        // --- V4: groove ---
+        case 'accel':
+          this.popups.push({ text: `Темп! ${e.bpm} BPM`, color: '#b388ff', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+          this.audio.cheer(false);
+          break;
+        case 'restart':
+          this.popups.push({ text: 'С первой стойки!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+          this.audio.miss();
+          this.emit({ type: 'weaveRestart' });
+          break;
+        case 'golden': {
+          // Бонус растёт с классом: на Open голден заметно легче — плоские +1500
+          // делали его фарм-классом (вердикт баланс-аудита)
+          const gb = { novice: 400, open: 400, excellent: 700, masters: 1000 }[this.course.cls] ?? 700;
+          this.bonusPoints += gb;
+          this.popups.push({ text: `+${gb}`, color: '#ffd54a', x: this.dog.x + 1.4, y: this.dog.y - 2.2, t: 0 });
+          this.fx.confettiBurst(this.dog.x, this.dog.y, 80, 'golden');
+          this.audio.fanfare();
+          this.emit({ type: 'goldenWeave' });
+          break;
+        }
         case 'early':
           // Раннее нажатие прощено: мягкий фидбек без фолта
           this.popups.push({ text: 'Рано!', color: '#cfd8dc', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
@@ -334,20 +481,44 @@ export class Run {
       this.r.zoomPunch();
       if (this.score.combo >= 4) this.audio.cheer(false);
       this.audio.crowdLevel(Math.min(0.8, 0.3 + this.score.combo * 0.07));
+      // Риск оправдался: ×2 очков за снаряд
+      if (m.risk) {
+        this.bonusPoints += 120;
+        this.popups.push({ text: '⚡ ×2!', color: '#ff8a65', x: d.x + 1.2, y: d.y - 2.0, t: 0 });
+      }
+      // Восстановление фокуса: 8 перфектов подряд, максимум ОДИН реген за прогон —
+      // иначе потолок рисковых очков раздувается на длинных трассах
+      this.focus.perfectsSince++;
+      if (this.focus.perfectsSince >= 8 && this.focus.count < this.focus.max && this.focus.regens < 1) {
+        this.focus.count++;
+        this.focus.regens++;
+        this.focus.perfectsSince = 0;
+        this.popups.push({ text: '+⚡ фокус', color: '#8fd8ff', x: d.x, y: d.y - 3.4, t: 0 });
+      }
     } else if (grade === 'good') {
       this.score.goods++;
       this.score.combo += this.breed.comboRate * 0.5;
+      this.focus.perfectsSince = 0;
+      if (m.risk) this.bonusPoints += 40; // смелость вознаграждается и на good
       this.audio.good();
     } else if (grade === 'late') {
       this.score.lates++;
-      this.score.combo = 0;
-      if (hadCombo) { this.desatT = 0.5; this.audio.music?.dip(); }
+      this.focus.perfectsSince = 0;
+      // Джек: упрямство — один сброс комбо за прогон прощается
+      if (hadCombo && this.breed.ability === 'stubborn' && !this._stubbornUsed) {
+        this._stubbornUsed = true;
+        this.popups.push({ text: 'Упрямство!', color: '#9ff0b4', x: d.x, y: d.y - 3.2, t: 0 });
+      } else {
+        this.score.combo = 0;
+        if (hadCombo) { this.desatT = 0.5; this.audio.music?.dip(); }
+      }
       // Планка дрожит от близкого пролёта
       if (m.o.type === 'jump' || m.o.type === 'wall') { m.state.rattle = 0.6; this.audio.creak(); }
       this.audio.crowdLevel(0.25);
     } else {
       this.score.misses++;
       this.score.combo = 0;
+      this.focus.perfectsSince = 0;
       this.score.faults += faults;
       this.slowT = 0.6;
       if (hadCombo) { this.desatT = 0.55; this.audio.music?.dip(); }
@@ -391,7 +562,10 @@ export class Run {
 
   _passEffects(m, grade) {
     const type = m.o.type;
-    if (['jump', 'tire', 'wall', 'broad'].includes(type) && grade !== 'miss') {
+    // Шина double-tap: дуга уже стартовала на событии takeoff
+    const tireAirborne = type === 'tire' && m.qte && m.qte.stage >= 1;
+    if (['jump', 'tire', 'wall', 'broad', 'spread', 'triple'].includes(type)
+        && grade !== 'miss' && !tireAirborne) {
       this._jumpArc(m);
       this.audio.jumpWhoosh();
     }
@@ -539,6 +713,29 @@ export class Run {
       if (!this.dog.hidden) r.drawDog(this.dog, this.breed);
       else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
     };
+    // Босс-призрак: бежит по трассе с постоянным темпом (время босса = SCT × k).
+    // Полупрозрачный силуэт с именем — соперник, которого надо обогнать.
+    if (this.ghost && this.phase !== 'countdown') {
+      const gd = Math.min(this.path.length - 0.1,
+        Math.max(0, this.time / this.ghost.time * this.path.length));
+      const gp = this.path.pointAt(gd);
+      const gt = this.path.tangentAt(gd);
+      const glook = BREEDS[this.ghost.look] || this.breed;
+      ctx.save();
+      ctx.globalAlpha = 0.38;
+      r.drawDog({ x: gp.x, y: gp.y, heading: Math.atan2(gt.y, gt.x),
+        runPhase: this.time * 9, elevation: 0, airborne: false }, glook);
+      ctx.restore();
+      const gs = r.toScreen(gp.x, gp.y, 1.6);
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      ctx.textAlign = 'center';
+      ctx.font = `bold ${Math.round(r.cam.zoom * 0.42)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#b388ff';
+      ctx.fillText(`👻 ${this.ghost.name}`, gs.x, gs.y);
+      ctx.restore();
+    }
+
     let dogDrawn = false;
     for (const m of sorted) {
       if (!onMark && !dogDrawn && m.o.y > dogY && m.o.type !== 'tunnel') { drawDog(); dogDrawn = true; }
