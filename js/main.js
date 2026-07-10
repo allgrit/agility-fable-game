@@ -1255,7 +1255,7 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 570 : 460) * z, h * 0.88);
+  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 570 : 500) * z, h * 0.88);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   ctx.save();
   ctx.fillStyle = `rgba(6,12,10,${0.72 * ease(0, 0.3)})`;
@@ -1330,7 +1330,7 @@ function drawResults(run, z) {
       : '🐾 Хлоя верит в тебя! Загляни в её дневник →';
     ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#8fd8ff';
-    const cy2 = py + (IS_TOUCH ? 400 : 400) * z;
+    const cy2 = py + (IS_TOUCH ? 400 : 405) * z;
     ctx.fillText(chloeMsg, w / 2, cy2);
     const ctw2 = ctx.measureText(chloeMsg).width;
     app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 10, y: cy2 - 16 * z, w: ctw2 + 20, h: 26 * z };
