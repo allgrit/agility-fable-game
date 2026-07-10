@@ -9,6 +9,20 @@ import { QTE_DEFS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
 import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
 
+// Service worker: свежая версия при каждом деплое без ручной очистки кеша.
+// При смене контролирующего SW (не первой установке) — тихая перезагрузка.
+if ('serviceWorker' in navigator &&
+    (location.protocol === 'https:' || location.hostname === '127.0.0.1' || location.hostname === 'localhost')) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    location.reload();
+  });
+}
+
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const audio = new AudioEngine();
