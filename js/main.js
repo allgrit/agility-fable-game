@@ -159,8 +159,13 @@ resize();
 
 const isPortrait = () => canvas.height > canvas.width;
 function evXY(e) {
+  // Точный маппинг тапа в canvas-пиксели: CSS-размер канваса может расходиться
+  // с visualViewport (iOS-панели, зум) — фиксированный DPR давал смещение вниз экрана.
   const r = canvas.getBoundingClientRect();
-  return { x: (e.clientX - r.left) * DPR, y: (e.clientY - r.top) * DPR };
+  return {
+    x: (e.clientX - r.left) * (canvas.width / r.width),
+    y: (e.clientY - r.top) * (canvas.height / r.height),
+  };
 }
 
 // ---------- УПРАВЛЕНИЕ ----------
@@ -280,8 +285,9 @@ canvas.addEventListener('pointerdown', (e) => {
       const z2 = Math.min(w2, h2) / 700;
       const pw2 = Math.min(520 * z2, w2 * 0.9), ph2 = Math.min(570 * z2, h2 * 0.88);
       const px2 = w2 / 2 - pw2 / 2, py2 = h2 / 2 - ph2 / 2;
+      const pad = 8 * z2; // запас хит-зоны под палец
       for (const b of resultsButtons(px2, py2, pw2, ph2, z2)) {
-        if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) {
           audio.click();
           if (b.id === 'next') return resultsKey('Enter');
           if (b.id === 'retry') return resultsKey('KeyR');
@@ -1279,14 +1285,20 @@ function shareResult() {
   const txt = `🐕 Agility Trial! · ${run.course.name || 'Трасса'} · ${run.time.toFixed(2)}с ${stars}` +
     `${res.clean ? ' · Q!' : ''} · комбо ×${run.score.maxCombo} · ${res.points} очков\n` +
     'https://allgrit.github.io/agility-fable-game/';
-  try { navigator.clipboard?.writeText(txt); } catch {}
-  try {
-    const a = document.createElement('a');
-    a.download = 'agility-result.png';
-    a.href = canvas.toDataURL('image/png');
-    a.click();
-  } catch {}
-  toasts.push({ icon: '📋', name: 'Скопировано!', desc: 'Текст в буфере + PNG-карточка', t: 0 });
+  // Мобильные: родное окно шаринга (Android/iOS); десктоп: буфер + PNG
+  if (navigator.share) {
+    navigator.share({ text: txt }).catch(() => {});
+    toasts.push({ icon: '📤', name: 'Поделиться', desc: 'Выбери, куда отправить', t: 0 });
+  } else {
+    try { navigator.clipboard?.writeText(txt); } catch {}
+    try {
+      const a = document.createElement('a');
+      a.download = 'agility-result.png';
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+    } catch {}
+    toasts.push({ icon: '📋', name: 'Скопировано!', desc: 'Текст в буфере + PNG-карточка', t: 0 });
+  }
   audio.click();
 }
 

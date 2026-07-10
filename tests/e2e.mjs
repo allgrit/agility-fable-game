@@ -355,13 +355,17 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     // Кнопки в границах панели и экрана (формулы resultsButtons)
     const bw = pw - 48 * z, rowY = py + ph - 62 * z;
     const inScreen = rowY + 44 * z <= c.height && px + 24 * z >= 0;
-    // Тап по «Ещё раз» (первая маленькая кнопка)
+    // Эмулируем расхождение CSS-размера и пиксельного (адресная строка Android):
+    // канвас растянут на 6% — тап по ВИДИМОЙ позиции кнопки должен попадать.
+    c.style.height = Math.round(window.innerHeight * 1.06) + 'px';
     const rect = c.getBoundingClientRect();
-    const dpr = c.width / rect.width;
+    const sx = c.width / rect.width, sy = c.height / rect.height;
     const smallW = (bw - 16 * z) / 3;
-    const bx = (px + 24 * z + smallW / 2) / dpr, by = (rowY + 22 * z) / dpr;
+    const bx = rect.left + (px + 24 * z + smallW / 2) / sx;
+    const by = rect.top + (rowY + 22 * z) / sy;
     c.dispatchEvent(new PointerEvent('pointerdown', { clientX: bx, clientY: by, pointerId: 555, bubbles: true }));
     await new Promise(r => setTimeout(r, 300));
+    c.style.height = '';
     return { inScreen, afterTap: A.app.state, phase: A.app.run?.phase };
   })()`);
   check('результаты (тач): кнопки в экране, «Ещё раз» перезапускает',
