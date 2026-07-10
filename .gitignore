@@ -4,3 +4,5 @@
 node_modules/
 package-lock.json
 tests/shots/
+!tests/shots/visual/REVIEW.md
+!tests/shots/visual/manifest.json

@@ -1094,7 +1094,11 @@ function drawToasts(dt) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const z = Math.min(w, h) / 700;
   let y = h - 90 * z - (IS_TOUCH ? 240 * z : 0);
+  // Показываем сколько влезает по высоте; остальные ждут в очереди (их таймер не тикает)
+  const maxVisible = Math.max(2, Math.floor(y / (70 * z)));
+  let shown = 0;
   for (const t of toasts) {
+    if (shown++ >= maxVisible) break;
     t.t = (t.t || 0) + dt;
     const alpha = t.t < 0.3 ? t.t / 0.3 : t.t > 3.0 ? Math.max(0, 1 - (t.t - 3.0) / 0.5) : 1;
     ctx.save();
@@ -1771,23 +1775,21 @@ function drawResults(run, z) {
     ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
   }
 
-  // V2: заработанное за прогон + XP-бар собаки
+  // V2: заработанное за прогон + XP-бар собаки (уровень в той же строке —
+  // подпись под баром накладывалась на промо-строку Хлои)
   if (app.lastEarn && ft > 3.3) {
     const e = app.lastEarn;
+    const d = dogState(meta, e.breedId);
+    const tg = titleFor(d.level);
     ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffe9a8';
-    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? `   +${e.rosettes} 🏵️` : ''}   +${e.xp} XP`,
-      w / 2, py + (IS_TOUCH ? 428 : 372) * z);
-    const d = dogState(meta, e.breedId);
-    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + (IS_TOUCH ? 444 : 386) * z;
+    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? `   +${e.rosettes} 🏵️` : ''}   +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
+      w / 2, py + (IS_TOUCH ? 420 : 372) * z);
+    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + (IS_TOUCH ? 434 : 386) * z;
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.fillRect(bx2, by2, bw2, 7 * z);
     ctx.fillStyle = '#69f0ae';
     ctx.fillRect(bx2, by2, bw2 * Math.min(1, d.xp / xpToNext(d.level)), 7 * z);
-    ctx.font = `${Math.round(12 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    const tg = titleFor(d.level);
-    ctx.fillText(`${tg ? tg + ' · ' : ''}уровень ${d.level}`, w / 2, by2 + 20 * z);
   }
 
   // Промо Хлои: после провала — поддержка, после победы — приглашение в дневник

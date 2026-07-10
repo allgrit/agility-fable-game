@@ -1,0 +1,185 @@
+// Визуальный харнесс: детерминированная серия скриншотов ключевых моментов
+// прохождения и анимаций → tests/shots/visual/*.png + manifest.json с критериями.
+// Кадры затем интерпретирует VLM-ревьюер (Claude) и пишет вердикты в REVIEW.md.
+// Запуск: node tests/visual-harness.mjs
+import { chromium } from 'playwright';
+import http from 'node:http';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const OUT = join(ROOT, 'tests', 'shots', 'visual');
+await mkdir(OUT, { recursive: true });
+
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const server = http.createServer(async (req, res) => {
+  const file = join(ROOT, req.url.split('?')[0] === '/' ? 'index.html' : req.url.split('?')[0].slice(1));
+  try {
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    res.end(await readFile(file));
+  } catch { res.writeHead(404); res.end(); }
+});
+await new Promise(r => server.listen(0, '127.0.0.1', r));
+const BASE = `http://127.0.0.1:${server.address().port}`;
+
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const context = await browser.newContext({ viewport: { width: 1280, height: 760 } });
+const page = await context.newPage();
+await page.goto(BASE + '/');
+await page.waitForFunction(() => !!window.__agility);
+
+// Единый раннер: стартует прогон и крутит до предиката, потом замораживает.
+// predicate — строка JS-выражения от (run, m, q, t) → boolean.
+const RUNNER = `(async (opts) => {
+  const A = window.__agility;
+  localStorage.setItem('agility_onboarded', '1');
+  localStorage.setItem('agility_hints', JSON.stringify({ weave: 1, aframe: 1, dogwalk: 1, seesaw: 1, table: 1 }));
+  A.setMode(opts.mode || 'career');
+  if (opts.cls) A.app.cls = opts.cls;
+  if (opts.stage) A.app.stage = opts.stage;
+  if (opts.realIdx !== undefined) A.app.realIdx = opts.realIdx;
+  A.app.breedIdx = opts.breedIdx ?? 3; // Хлоя по умолчанию — виден мерль
+  A.startRun();
+  const run = A.app.run;
+  const proto = Object.getPrototypeOf(run);
+  run.update = () => {};
+  const pred = new Function('run', 'm', 'q', 't', 'return (' + opts.predicate + ');');
+  let guard = 0, missArmed = opts.missAt || 0;
+  while (guard++ < 60000 && run.phase !== 'finished') {
+    const m = run.activeMark;
+    const q = m && m.qte;
+    const t = q ? run.time - m.qteStart : 0;
+    if (pred(run, m, q, t)) { run.update = () => {}; return { hit: true, time: +run.time.toFixed(2) }; }
+    if (q && q.state === 'active') {
+      const d = q.def;
+      const resolvedCount = run.marks.filter(x => x.resolved).length;
+      const skipInput = missArmed && resolvedCount === missArmed - 1; // намеренный промах N-го снаряда
+      if (!skipInput) {
+        if (d.kind === 'press') { if (t >= q.target - 0.01) run.input(d.key, true); }
+        else if (d.kind === 'rhythm') {
+          if (q.beatIdx < d.beats && t >= q.target + q.beatIdx * d.beat - 0.01) run.input(d.keys[q.beatIdx % 2], true);
+        } else if (d.kind === 'holdRelease') {
+          if (!q.holding && q.holdStart == null && t >= q.target - 0.01) run.input(d.key, true);
+          else if (q.holding && q.progress >= (d.zone[0] + d.zone[1]) / 2) run.input(d.key, false);
+        } else if (d.kind === 'twoStage') {
+          if (q.stage === 0 && t >= q.target - 0.01) run.input(d.key, true);
+          else if (q.stage === 1 && (t - q.tipAt) >= d.tipDelay - 0.01) run.input(d.key2, true);
+        } else if (d.kind === 'hold') {
+          if (!q.holding && q.holdStart == null && t >= q.target - 0.01) run.input(d.key, true);
+        }
+      }
+    }
+    proto.update.call(run, 1 / 60);
+    // Проверка предиката и на пост-обновлённом состоянии (для мгновенных фаз)
+    const m2 = run.activeMark, q2 = m2 && m2.qte, t2 = q2 ? run.time - m2.qteStart : 0;
+    if (pred(run, m2, q2, t2)) { run.update = () => {}; return { hit: true, time: +run.time.toFixed(2) }; }
+  }
+  if (opts.thenFinishT !== undefined) {
+    // update остаётся замороженным — иначе finishT растёт в реальном времени и этап уплывает
+    run.finishT = opts.thenFinishT;
+    await new Promise(r => setTimeout(r, 600));
+    return { hit: true, finished: true };
+  }
+  // Сюда попадаем только если предикат так и не сработал — это провал сцены
+  return { hit: false, ranToEnd: true, time: +run.time.toFixed(2) };
+})`;
+
+// ---- Сцены: имя, настройка, предикат, критерии для визуального ревью ----
+const SCENES = [
+  {
+    name: '01-ritual', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.phase === 'countdown' && run.countdownT < 0.9 && run.countdownT > 0.4",
+    criteria: 'Ритуал старта: собака в стойке у СТАРТ-арки, хендлер рядом, надпись «На старт…», HUD-панели видны, никакого QTE. Судья стоит в дальнем углу поля — в кадр у старта не попадает, это норма.',
+  },
+  {
+    name: '02-ring-good', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "q && q.state==='active' && q.def.kind==='press' && (() => { const v=Math.max(run.dog.speed,.5); const dd=m.entryD-1.3-run.dog.dist; return dd>0 && Math.abs(dd)<=q.w*0.6*v && Math.abs(dd)>q.w*0.28*v; })()",
+    criteria: 'Кольцо тайминга ЗЕЛЁНОЕ вокруг собаки (good-окно), собака на подлёте к барьеру, хендлер с пузырём команды, клавиша-подсказка внизу подсвечена зеленоватым.',
+  },
+  {
+    name: '03-ring-perfect', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "q && q.state==='active' && q.def.kind==='press' && (() => { const v=Math.max(run.dog.speed,.5); const dd=m.entryD-1.3-run.dog.dist; return Math.abs(dd)<=q.w*0.28*v; })()",
+    criteria: 'Кольцо ЖЁЛТОЕ яркое со свечением вплотную к собаке (perfect-момент), собака ~1 корпус до планки барьера.',
+  },
+  {
+    name: '04-jump-air', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.dog.airborne && run.dog.elevation > 0.65",
+    criteria: 'Собака В ВОЗДУХЕ над барьером: вытянутая поза, уши назад, тень уменьшена и отделена от собаки, планка НЕ сбита.',
+  },
+  {
+    name: '05-land-squash', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.dog.landT > 0.55",
+    criteria: 'Кадр приземления: собака слегка СПЛЮЩЕНА (сквош — шире и ниже обычного), клубы пыли под лапами.',
+  },
+  {
+    name: '06-weave-mid', mode: 'worldcup', realIdx: 1,
+    predicate: "m && m.o.type==='weave' && q && q.state==='active' && q.beatIdx >= 2 && q.beatIdx <= 4",
+    criteria: 'Слалом в процессе: собака МЕЖДУ стойками (12 палок в ряд), внизу ритм-подсказка из 6 стрелок — часть зелёные (пройдены), текущая жёлтая; хендлер рядом.',
+  },
+  {
+    name: '07-dogwalk-zone', mode: 'worldcup', realIdx: 1,
+    predicate: "m && m.o.type==='dogwalk' && q && q.holding && q.progress > 0.55 && q.progress < 0.9",
+    criteria: 'Бум: собака НА снаряде на высоте, внизу шкала «Отпусти … в жёлтой зоне» с жёлтым сегментом справа и белым маркером прогресса; жёлтые контактные зоны на концах бума.',
+  },
+  {
+    name: '08-seesaw', mode: 'worldcup', realIdx: 1,
+    predicate: "m && m.o.type==='seesaw' && q && q.stage === 1",
+    criteria: 'Качели: собака на доске, ждёт опускания; подсказка-кольцо/клавиша второй стадии; доска с жёлтыми зонами на концах.',
+  },
+  {
+    name: '09-sprint', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.phase === 'running' && run.sprint.active",
+    setup: 'mash',
+    criteria: 'Финишный спурт: надпись «ФИНИШ! ЖМИ ← → !» (пульсирует), собака мчится к финиш-арке, все номера снарядов — зелёные галочки.',
+  },
+  {
+    name: '10-desat-comboloss', mode: 'career', cls: 'novice', stage: 2, missAt: 4,
+    predicate: "run.desatT > 0.25",
+    criteria: 'Потеря комбо: мир ЗАМЕТНО ОБЕСЦВЕЧЕН (серый оттенок), попап ошибки над собакой, хвост собаки поджат.',
+  },
+  {
+    name: '11-combo-trail', mode: 'career', cls: 'open', stage: 2,
+    predicate: "run.score.combo >= 8 && !run.dog.hidden && !run.dog.airborne",
+    criteria: 'Комбо-шлейф: за собакой цветной (радужный) след из силуэтов, спидлайны по краям экрана, счётчик «Комбо ×8+» в HUD жёлтым.',
+  },
+  {
+    name: '12-results-mid', mode: 'career', cls: 'novice', stage: 1,
+    predicate: 'false', thenFinishT: 1.6,
+    criteria: 'Секвенция результатов НА СЕРЕДИНЕ (finishT=1.6): вердикт-заголовок и строки время/фолты видны, звёзды ещё серые заглушки, очков/медали/наград ЕЩЁ НЕТ (подсказка ENTER-скипа с 1.0с — норма) — этапность работает.',
+  },
+  {
+    name: '13-results-full', mode: 'career', cls: 'novice', stage: 1,
+    predicate: 'false', thenFinishT: 4,
+    criteria: 'Полный протокол: вердикт, 3 звезды, все строки, медаль, «+N 🦴 +XP», XP-бар с уровнем, строка Хлои, конфетти в фоне.',
+  },
+];
+
+const manifest = [];
+for (const sc of SCENES) {
+  const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
+    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx,
+    predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT,
+  })})`);
+  if (sc.setup === 'mash') {
+    // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)
+    // и чистим конфетти/попапы последнего перфекта — кадр остаётся читаемым
+    await page.evaluate(`(async () => {
+      const run = window.__agility.app.run;
+      for (let i = 0; i < 12; i++) run.input(i % 2 ? 'ArrowRight' : 'ArrowLeft', true);
+      if (run.fx && run.fx.list) run.fx.list.length = 0;
+      if (run.popups) run.popups.length = 0;
+    })()`);
+  }
+  await new Promise(r => setTimeout(r, 1800)); // rAF дорисует замороженную сцену
+  await page.screenshot({ path: join(OUT, sc.name + '.png') });
+  manifest.push({ file: sc.name + '.png', hit: res.hit, criteria: sc.criteria });
+  console.log(`${res.hit ? 'ok ' : 'MISS'} ${sc.name}`);
+}
+
+await writeFile(join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
+await browser.close();
+server.close();
+const misses = manifest.filter(m => !m.hit).length;
+console.log(`\n${manifest.length} scenes, ${misses} predicate-misses. Manifest: tests/shots/visual/manifest.json`);
+process.exit(misses ? 1 : 0);
