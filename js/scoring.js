@@ -32,7 +32,7 @@ export const BREEDS = {
   poodle: {
     id: 'poodle', name: 'Той-пудель', desc: 'Кудрявый шоколадный чемпион. Широкое окно и комбо!',
     speedMul: 0.95, windowScale: 1.15, comboRate: 1.4,
-    ability: 'show', abilityText: '⚡ Дар: шоу — ×1.5 косточек за прогон',
+    ability: 'show', abilityText: '⚡ Дар: шоу — ×1.25 косточек за прогон',
     body: '#5d3a24', chest: '#6f4830', ear: '#4a2d1a', size: 0.68,
     curly: '#6f4830', unlockAch: 'golden-paw',
   },

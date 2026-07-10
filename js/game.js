@@ -9,6 +9,7 @@ const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tu
 
 // Обучающие подсказки: первая встреча со сложной механикой — slow-mo + инструкция.
 export const HINTS = {
+  tunnel:  'ТУННЕЛЬ: жми НИЗ на подлёте ко входу!',
   weave:   'СЛАЛОМ: жми ЛЕВО и ПРАВО в ритм метронома — стойки-ноты едут к линии удара!',
   aframe:  'ГОРКА: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
   dogwalk: 'БУМ: зажми ВЕРХ на подлёте и отпусти в ЖЁЛТОЙ зоне шкалы!',
@@ -67,9 +68,10 @@ export class Run {
     this._stepAcc = 0;
     this.hintText = null; // обучающая подсказка при первой встрече механики
     this.hintSlow = 0;    // сек оставшегося slow-mo
-    // Late-commit: фокусы риска. Заявка до окна → окно 35%, очки ×2, промах = 5 фолтов.
+    // Late-commit: фокусы риска. Заявка до окна → окно сжимается до 35% ширины,
+    // бонусные очки за успех, промах = 5 фолтов.
     const maxFocus = 3 + (breed.ability === 'drive' ? 1 : 0);
-    this.focus = { count: maxFocus, max: maxFocus, used: 0, perfectsSince: 0 };
+    this.focus = { count: maxFocus, max: maxFocus, used: 0, perfectsSince: 0, regens: 0 };
     this._stubbornUsed = false; // джек: один сейв комбо за прогон
   }
 
@@ -84,7 +86,7 @@ export class Run {
     m.risk = true;
     this.focus.count--;
     this.focus.used++;
-    m.qte.w *= 0.35; // окно сжимается до последних 35%
+    m.qte.w *= 0.35; // окно сжимается до 35% ширины (симметрично вокруг цели)
     this.popups.push({ text: '⚡ РИСК ×2!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
     this.audio.reveal();
     this.emit({ type: 'risk' });
@@ -150,9 +152,12 @@ export class Run {
 
   // ---------- ЦИКЛ ----------
   update(dt) {
-    if (this.hitstop > 0) { this.hitstop -= dt; dt *= 0.15; }
-    if (this.hintSlow > 0) { this.hintSlow -= dt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
-    if (this.slowmoT > 0) { this.slowmoT -= dt; dt *= 0.5; }
+    // Таймеры слоу-мо тают по РЕАЛЬНОМУ dt — иначе перекрывающиеся эффекты
+    // (hitstop + hint + slowmo) растягивали друг друга в разы
+    const rawDt = dt;
+    if (this.hitstop > 0) { this.hitstop -= rawDt; dt *= 0.15; }
+    if (this.hintSlow > 0) { this.hintSlow -= rawDt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
+    if (this.slowmoT > 0) { this.slowmoT -= rawDt; dt *= 0.5; }
     if (this.desatT > 0) this.desatT -= dt;
     this.time += this.phase === 'running' ? dt : 0;
     this.audio.music?.speedFilter(this.dog.speed);
@@ -406,12 +411,17 @@ export class Run {
           this.audio.miss();
           this.emit({ type: 'weaveRestart' });
           break;
-        case 'golden':
-          this.bonusPoints += 1500;
+        case 'golden': {
+          // Бонус растёт с классом: на Open голден заметно легче — плоские +1500
+          // делали его фарм-классом (вердикт баланс-аудита)
+          const gb = { novice: 400, open: 400, excellent: 700, masters: 1000 }[this.course.cls] ?? 700;
+          this.bonusPoints += gb;
+          this.popups.push({ text: `+${gb}`, color: '#ffd54a', x: this.dog.x + 1.4, y: this.dog.y - 2.2, t: 0 });
           this.fx.confettiBurst(this.dog.x, this.dog.y, 80, 'golden');
           this.audio.fanfare();
           this.emit({ type: 'goldenWeave' });
           break;
+        }
         case 'early':
           // Раннее нажатие прощено: мягкий фидбек без фолта
           this.popups.push({ text: 'Рано!', color: '#cfd8dc', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
@@ -467,10 +477,12 @@ export class Run {
         this.bonusPoints += 120;
         this.popups.push({ text: '⚡ ×2!', color: '#ff8a65', x: d.x + 1.2, y: d.y - 2.0, t: 0 });
       }
-      // Восстановление фокуса: 8 перфектов подряд возвращают заявку
+      // Восстановление фокуса: 8 перфектов подряд, максимум ОДИН реген за прогон —
+      // иначе потолок рисковых очков раздувается на длинных трассах
       this.focus.perfectsSince++;
-      if (this.focus.perfectsSince >= 8 && this.focus.count < this.focus.max) {
+      if (this.focus.perfectsSince >= 8 && this.focus.count < this.focus.max && this.focus.regens < 1) {
         this.focus.count++;
+        this.focus.regens++;
         this.focus.perfectsSince = 0;
         this.popups.push({ text: '+⚡ фокус', color: '#8fd8ff', x: d.x, y: d.y - 3.4, t: 0 });
       }

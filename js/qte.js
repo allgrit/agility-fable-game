@@ -103,6 +103,7 @@ export class Qte {
     const d = this.def;
     if (d.kind === 'groove') {
       this.beat = 60 / (opts.bpm || 120);
+      this.baseBeat = this.beat; // рестарт возвращает исходный темп
       this.gw = opts.grooveWindows || GROOVE_WINDOWS.open;
       this.accelEvery = opts.accelEvery || 4;   // perfect-серия для +4% BPM
       this.audioOffset = opts.audioOffset || 0; // калибровка задержки звука (сек)
@@ -115,6 +116,9 @@ export class Qte {
       this.fakePauses = opts.fakePauses || []; // [{at, dur}] по сырому времени счёта
       this.freezeStart = null;
       this.goAt = null;
+      // Сентинел выше любого счёта — иначе первый же update после старта/сброса
+      // эмитит ложный count(5) до того, как прошло время
+      this._lastSec = Math.ceil(d.freezeTime) + 1;
     }
     if (d.kind === 'serp') {
       const rand = opts.serpRand || Math.random;
@@ -338,12 +342,12 @@ export class Qte {
           this.stage = 1;
           this.stageGrade = g;
           this.freezeStart = t;
-          this._lastSec = null;
+          this._lastSec = Math.ceil(d.freezeTime) + 1;
           this._emit('hold', { text: d.holdCmd });
         } else if (this.stage === 1) {
           // ЛЮБОЙ ввод во время счёта — судья начинает счёт заново
           this.freezeStart = t;
-          this._lastSec = null;
+          this._lastSec = Math.ceil(d.freezeTime) + 1;
           this.progress = 0;
           this._emit('freezeReset');
         } else if (this.stage === 2) {
@@ -480,7 +484,8 @@ export class Qte {
     if (g === 'perfect') {
       this.perfectStreak++;
       if (this.perfectStreak % this.accelEvery === 0) {
-        this.beat /= 1.04;   // разгон метронома
+        // Разгон метронома с потолком 168 BPM — окна не должны перекрываться
+        this.beat = Math.max(this.beat / 1.04, 60 / 168);
         this._emit('accel', { bpm: Math.round(60 / this.beat) });
       }
     } else {
@@ -489,7 +494,10 @@ export class Qte {
     if (g === 'miss') {
       this.missCount++;
       if (this.missCount >= 3) {
-        // Возврат на 1-ю стойку: время идёт, фолтов нет — наказание темпом
+        // Возврат на 1-ю стойку: время идёт, фолтов нет — наказание темпом.
+        // Темп тоже сбрасывается — «с первой стойки» значит с исходного ритма,
+        // иначе разгон копится через рестарты без предела.
+        this.beat = this.baseBeat;
         this.beatIdx = 0;
         this.beatGrades = [];
         this.missCount = 0;

@@ -362,7 +362,12 @@ canvas.addEventListener('pointerdown', (e) => {
       const dd = Math.hypot(p.x - b.x, p.y - b.y);
       if (dd < bestD) { bestD = dd; best = b; }
     }
-    if (best && bestD <= best.r * 2.4) {
+    // Стол «Замри»: во время счёта любой ввод = сброс — магнит сжимается до
+    // точного попадания, чтобы случайный тап рядом с кнопкой не карал игрока
+    const fm = app.run.activeMark;
+    const freezing = fm?.qte?.def?.kind === 'freeze' && fm.qte.stage === 1;
+    const magnetR = freezing ? 1.0 : 2.4;
+    if (best && bestD <= best.r * magnetR) {
       touchPointers.set(e.pointerId, best.code);
       app.run.input(best.code, true);
     }
@@ -551,15 +556,14 @@ function isBossStage() {
 // После победы над боссом: класс закрыт, переход дальше (или гранд-финал → чемпион)
 function applyBossVictory() {
   meta.bosses[app.cls] = 1;
-  saveMeta(meta);
   if (app.cls === 'masters') {
     meta.ngplusUnlocked = 1;
-    saveMeta(meta);
   } else {
     app.cls = nextClass(app.cls);
     app.stage = 1;
     saveProgress();
   }
+  saveMeta(meta);
 }
 
 function toMenu() { app.state = 'menu'; app.run = null; audio.crowdLevel(0); }
@@ -810,10 +814,11 @@ function expectedKey(run) {
   if (d.kind === 'rhythm' || d.kind === 'groove') return d.keys[q.beatIdx % 2];
   if (d.kind === 'twoStage') return q.stage === 1 ? d.key2 : d.key;
   if (d.kind === 'serp') {
-    // Направление раскрывается за reveal до бита
+    // Направление раскрывается за reveal до бита; на таче чуть раньше —
+    // палец должен успеть дойти до кнопки после подсветки
     const t = run.time - m.qteStart;
     const beatT = q.target + q.beatIdx * d.beat;
-    return t >= beatT - d.reveal ? q.seq[q.beatIdx] : null;
+    return t >= beatT - (IS_TOUCH ? 1.0 : d.reveal) ? q.seq[q.beatIdx] : null;
   }
   if (d.kind === 'freeze') return q.stage === 1 ? null : d.key; // во время счёта НЕ жать
   return d.key;
@@ -1339,7 +1344,7 @@ function drawCalib() {
   }
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillText('ESC / тап по краю — назад', w / 2, h * 0.88);
+  ctx.fillText(IS_TOUCH ? 'Тап по ВЕРХНЕМУ краю — назад' : 'ESC — назад', w / 2, h * 0.88);
   ctx.restore();
 }
 
@@ -1398,8 +1403,9 @@ function drawTrainer(dt) {
     const q = tr.qte;
     if (q.state === 'active' && q.nextBeatT !== null && q.beatIdx < q.def.beats) {
       const eta = q.nextBeatT - t;
-      if (eta <= 0.12 && q._schedTick !== q.beatIdx) {
-        q._schedTick = q.beatIdx;
+      // Ключ учитывает рестарты — иначе первый бит после возврата молчит
+      if (eta <= 0.12 && q._schedTick !== q.beatIdx + q.restarts * 100) {
+        q._schedTick = q.beatIdx + q.restarts * 100;
         audio.metroTick?.(Math.max(0, eta), q.beatIdx % 2);
       }
     }
@@ -1622,7 +1628,8 @@ function drawQte(run, m, z) {
   let cy = h - 130 * z;
   if (IS_TOUCH) {
     const topOfButtons = Math.min(...touchButtons().map(b => b.y - b.r));
-    cy = topOfButtons - 70 * z;
+    // 90z: лента groove на компактных экранах не должна липнуть к кнопкам
+    cy = topOfButtons - 90 * z;
   }
   const cx = w / 2;
 
@@ -1656,7 +1663,7 @@ function drawQte(run, m, z) {
       const g = q.beatGrades[i];
       const isNext = i === q.beatIdx;
       const beatT = q.target + i * def.beat;
-      const revealed = t >= beatT - def.reveal;
+      const revealed = t >= beatT - (IS_TOUCH ? 1.0 : def.reveal);
       const label = revealed ? KEY_LABEL[q.seq[i]] : '?';
       keycap(ctx, x, cy, kr * (isNext ? 1.1 : 0.85), label,
         g ? (g === 'miss' ? '#ff6b6b' : '#69f0ae')
@@ -1850,7 +1857,7 @@ function gaugeBar(ctx, cx, cy, bw, p, color, caption, z) {
 function drawMenu(dt) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   if (window.__layoutDebug) window.__layoutDebug.cards = [];
-  app.t += dt;
+  // app.t инкрементирует только frame() — здесь был двойной тик (анимации ×2)
   // Фон: размытое поле
   renderer.cam.x = 26 + Math.sin(app.t * 0.1) * 6;
   renderer.cam.y = 18 + Math.cos(app.t * 0.13) * 3;
@@ -2248,12 +2255,13 @@ function drawResults(run, z) {
         meta.counters.goldByBreed[breedList[app.breedIdx].id] =
           (meta.counters.goldByBreed[breedList[app.breedIdx].id] || 0) + 1;
       }
-      // Пудель: дар «шоу» — ×1.5 косточек за прогон
+      // Пудель: дар «шоу» — ×1.25 косточек за прогон (×1.5 стакался со
+      // streak-множителем до ×2.25 и делал пуделя безальтернативным фармером)
       if (run.breed.ability === 'show' && earned.bones > 0) {
-        const extra = Math.round(earned.bones * 0.5);
+        const extra = Math.round(earned.bones * 0.25);
         meta.bones += extra;
         earned.bones += extra;
-        earned.detail.push(['дар «шоу» ×1.5', extra]);
+        earned.detail.push(['дар «шоу» ×1.25', extra]);
       }
       // Розетки-вехи: первое золото трассы, чистая ЧМ-трасса
       let ros = 0;
