@@ -424,6 +424,17 @@ canvas.addEventListener('pointerdown', (e) => {
     app.state = 'settings'; audio.click(); return;
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
+  // Дуэль-реванш с пропущенным боссом (строка «Дуэли» на карте карьеры)
+  if (app.state === 'menu' && app.mode === 'career') {
+    for (const bz of app.bossZones || []) {
+      if (inZone(bz)) {
+        app.bossChallenge = bz.cls;
+        audio.click();
+        startRun();
+        return;
+      }
+    }
+  }
   if (app.state === 'menu' && inZone(app.chloeZoneMenu)) return openChloe();
   // Кнопки-стрелки переключателя режима
   if (app.state === 'menu' && app.modeArrows) {
@@ -529,7 +540,9 @@ function resultsKey(code) {
       return;
     }
     if (app.mode === 'career') {
-      if (isBossStage()) {
+      if (app.bossChallenge) {
+        // Реванш проигран — та же дуэль ещё раз, прогресс не двигаем
+      } else if (isBossStage()) {
         // Босс не побеждён — та же дуэль ещё раз (победа обработана в результатах)
       } else if (app.result && app.result.qualified) {
         app.stage++;
@@ -559,19 +572,21 @@ function isBossStage() {
 }
 
 // После победы над боссом: класс закрыт, переход дальше (или гранд-финал → чемпион)
-function applyBossVictory() {
-  meta.bosses[app.cls] = 1;
-  if (app.cls === 'masters') {
-    meta.ngplusUnlocked = 1;
-  } else {
-    app.cls = nextClass(app.cls);
+function applyBossVictory(bossCls) {
+  meta.bosses[bossCls] = 1;
+  if (bossCls === 'masters') meta.ngplusUnlocked = 1;
+  // Переход класса — только у естественного босса текущего класса (этап 6).
+  // Реванш с пропущенным боссом текущий прогресс не трогает.
+  if (!app.bossChallenge && bossCls === app.cls && app.stage > STAGES && bossCls !== 'masters') {
+    app.cls = nextClass(bossCls);
     app.stage = 1;
     saveProgress();
   }
+  app.bossChallenge = null;
   saveMeta(meta);
 }
 
-function toMenu() { app.state = 'menu'; app.run = null; audio.crowdLevel(0); }
+function toMenu() { app.state = 'menu'; app.run = null; app.bossChallenge = null; audio.crowdLevel(0); }
 
 function startRun() {
   const breed = breedList[app.breedIdx];
@@ -603,11 +618,12 @@ function startRun() {
       'jump', 'tire', 'spread', 'serpentine', 'weave', 'table', 'triple', 'seesaw', 'tunnel', 'jump',
     ] });
     course.name = '🧪 Тест-драйв V4 · все механики';
-  } else if (isBossStage()) {
-    // Босс-этап: фиксированная дуэльная трасса класса, гонка с призраком
-    const boss = bossFor(app.cls);
-    course = generateCourse(careerSeed(app.cls, 1) * 31 + 17, app.cls);
-    course.name = `👻 Босс: ${boss.name} · ${SEASONS[app.cls].name}`;
+  } else if (isBossStage() || app.bossChallenge) {
+    // Босс-этап (6-й) или реванш с пропущенным боссом: дуэльная трасса класса босса
+    const bcls = app.bossChallenge || app.cls;
+    const boss = bossFor(bcls);
+    course = generateCourse(careerSeed(bcls, 1) * 31 + 17, bcls);
+    course.name = `👻 ${app.bossChallenge ? 'Реванш' : 'Босс'}: ${boss.name} · ${SEASONS[bcls].name}`;
   } else {
     // Прогрессия внутри Novice: 1-2 — только прыжки, 3-4 — + слалом, 5 — + горка (превью Open).
     const variant = app.cls === 'novice'
@@ -630,9 +646,11 @@ function startRun() {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
     app.run.ghost = { name: 'Эйва', k: 1.05, time: app.run.sct * 1.05, look: 'aussie' };
     app.run.startLine = 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
-  } else if (isBossStage()) {
-    const boss = bossFor(app.cls);
+  } else if (isBossStage() || app.bossChallenge) {
+    const bcls = app.bossChallenge || app.cls;
+    const boss = bossFor(bcls);
     app.run.ghost = { name: boss.name, k: boss.k, time: app.run.sct * boss.k, look: boss.breedLook };
+    app.run.bossCls = bcls;
     app.run.startLine = pickLine('bossStart');
     toasts.push({ icon: '👻', name: boss.name, desc: boss.taunt, t: 0 });
   } else {
@@ -936,7 +954,35 @@ function drawCareerMap(ctx, cx, y, z, portrait) {
       ctx.fillStyle = locked ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.85)';
     }
   });
+
+  // Пропущенные боссы прошлых классов: старый прогресс обгонял появление боссов
+  // (сейв с cls=excellent никогда не встретит Эйву). Строка «Дуэли» — тап по
+  // призраку запускает реванш БЕЗ сдвига текущего прогресса.
+  app.bossZones = [];
+  let extraRows = 0;
+  const missed = CLASS_ORDER.filter((cls2, ci2) =>
+    ci2 < curClsIdx && bossFor(cls2) && !meta.bosses[cls2]);
+  if (missed.length) {
+    extraRows = 1;
+    const dy = y + (portrait ? 1 : 2) * 19 * z + 6 * z;
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(13.5 * z)}px "Segoe UI", sans-serif`;
+    const prefix = '⚔ Дуэли: ';
+    const parts = missed.map(cls2 => `👻 ${bossFor(cls2).name}`);
+    const full = prefix + parts.join('  ·  ') + ' — тапни!';
+    ctx.fillStyle = '#d1b3ff';
+    ctx.fillText(full, cx, dy);
+    const totalW = ctx.measureText(full).width;
+    let xCursor = cx - totalW / 2 + ctx.measureText(prefix).width;
+    const sepW = ctx.measureText('  ·  ').width;
+    missed.forEach((cls2, i) => {
+      const pw2 = ctx.measureText(parts[i]).width;
+      app.bossZones.push({ cls: cls2, x: xCursor - 8, y: dy - 15 * z, w: pw2 + 16, h: 22 * z });
+      xCursor += pw2 + sepW;
+    });
+  }
   ctx.restore();
+  return extraRows;
 }
 
 // ---------- МАГАЗИН / ГАРДЕРОБ ----------
@@ -2004,8 +2050,8 @@ function drawMenu(dt) {
   const subY = modeY + 30 * z;
   let headerBottom = modeY + 16 * z; // низ точек-индикаторов
   if (app.mode === 'career') {
-    drawCareerMap(ctx, w / 2, subY, z, isPortrait());
-    headerBottom = subY + (isPortrait() ? 1 : 2) * 19 * z;
+    const extra = drawCareerMap(ctx, w / 2, subY, z, isPortrait());
+    headerBottom = subY + ((isPortrait() ? 1 : 2) + (extra || 0)) * 19 * z;
   } else if (app.mode === 'daily') {
     const mod = MODIFIERS[dailyModifier()];
     if (mod.name) {
@@ -2258,12 +2304,12 @@ function drawResults(run, z) {
     app.newMedal = recordMedal(app.result.stars);
     if (app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
     // Босс-дуэль: победа = квалификация + время быстрее призрака
-    if (run.ghost) {
+    if (run.ghost && run.bossCls) {
       const won = app.result.qualified && run.time < run.ghost.time;
       if (won) {
-        app.bossWin = { boss: bossFor(app.cls), time: run.time, ghostTime: run.ghost.time,
-          breedName: run.breed.name, cls: app.cls };
-        applyBossVictory();
+        app.bossWin = { boss: bossFor(run.bossCls), time: run.time, ghostTime: run.ghost.time,
+          breedName: run.breed.name, cls: run.bossCls };
+        applyBossVictory(run.bossCls);
         run.finishLine = pickLine('bossWin');
         audio.fanfare();
       } else {
