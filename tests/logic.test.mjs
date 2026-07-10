@@ -474,6 +474,34 @@ test('косметика: витрина дня детерминирована, 
   assert.equal(notOwned.body, '#111');
 });
 
+test('V4 способности: у каждой породы задан дар с описанием', async () => {
+  const { BREEDS } = await import('../js/scoring.js');
+  const abilities = new Set();
+  for (const b of Object.values(BREEDS)) {
+    assert.ok(b.ability, `${b.id}: есть ability`);
+    assert.ok(b.abilityText && b.abilityText.length > 5, `${b.id}: есть описание дара`);
+    abilities.add(b.ability);
+  }
+  assert.equal(abilities.size, 5, 'все дары уникальны');
+});
+
+test('V4 late-commit: riskScale сжимает окно QTE', () => {
+  const normal = new Qte('jump');
+  const risky = new Qte('jump', { riskScale: 0.35 });
+  assert.ok(Math.abs(risky.w - normal.w * 0.35) < 1e-9);
+  // Perfect в риске возможен только у самой цели
+  risky.update(0.01);
+  risky.press('Space', risky.target);
+  assert.equal(risky.result.grade, 'perfect');
+});
+
+test('V4 finalScore: bonus добавляется к очкам (Golden Weave, риск)', async () => {
+  const { finalScore } = await import('../js/scoring.js');
+  const base = finalScore({ time: 30, sct: 40, faults: 0, perfects: 10, total: 12, maxCombo: 8 });
+  const bonused = finalScore({ time: 30, sct: 40, faults: 0, perfects: 10, total: 12, maxCombo: 8, bonus: 1500 });
+  assert.equal(bonused.points - base.points, 1500);
+});
+
 test('каталог косметики валиден: id уникальны, слоты/редкости известны, окрасы полны', async () => {
   const { ITEMS, RARITY, SLOT_NAMES } = await import('../js/cosmetics.js');
   const { BREEDS } = await import('../js/scoring.js');

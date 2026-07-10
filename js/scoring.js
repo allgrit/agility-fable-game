@@ -1,30 +1,38 @@
 // Судейство: SCT, фолты, звёзды, титулы. Чистая логика.
 
+// ability — пассивный дар породы (V4): groove — разгон метронома за 3 перфекта,
+// sense — обманки «?» раскрываются раньше, stubborn — один сейв комбо за прогон,
+// drive — +1 фокус риска, show — ×1.5 косточек за прогон.
 export const BREEDS = {
   border: {
     id: 'border', name: 'Бордер-колли', desc: 'Молния. Узкое окно реакции.',
     speedMul: 1.15, windowScale: 0.85, comboRate: 1.0,
+    ability: 'groove', abilityText: '⚡ Дар: Groove-разгон за 3 перфекта',
     body: '#2b2b30', chest: '#f5f0e8', ear: '#1c1c20', size: 1.0,
   },
   sheltie: {
     id: 'sheltie', name: 'Шелти', desc: 'Точность и стиль. Широкое окно реакции.',
     speedMul: 0.95, windowScale: 1.2, comboRate: 1.0,
+    ability: 'sense', abilityText: '⚡ Дар: чутьё — обманки «?» раскрываются раньше',
     body: '#a86a32', chest: '#f7efdd', ear: '#7a4a20', size: 0.82,
   },
   jack: {
     id: 'jack', name: 'Джек-рассел', desc: 'Заводной моторчик. Комбо растёт быстрее.',
     speedMul: 0.9, windowScale: 1.0, comboRate: 1.6,
+    ability: 'stubborn', abilityText: '⚡ Дар: упрямство — 1 сейв комбо за прогон',
     body: '#f2ece0', chest: '#ffffff', ear: '#c07830', size: 0.7,
   },
   aussie: {
     id: 'aussie', name: 'Хлоя', desc: 'Та самая аусси! Игра посвящена ей 💙',
     speedMul: 1.08, windowScale: 1.05, comboRate: 1.15,
+    ability: 'drive', abilityText: '⚡ Дар: драйв — +1 фокус риска',
     body: '#9aa3ad', chest: '#f7f5f0', ear: '#2e3238', size: 0.95,
     merle: '#3a3f46', tan: '#c98a4b', eye: '#8fd8ff', legs: '#e8e2d6',
   },
   poodle: {
     id: 'poodle', name: 'Той-пудель', desc: 'Кудрявый шоколадный чемпион. Широкое окно и комбо!',
     speedMul: 0.95, windowScale: 1.15, comboRate: 1.4,
+    ability: 'show', abilityText: '⚡ Дар: шоу — ×1.5 косточек за прогон',
     body: '#5d3a24', chest: '#6f4830', ear: '#4a2d1a', size: 0.68,
     curly: '#6f4830', unlockAch: 'golden-paw',
   },

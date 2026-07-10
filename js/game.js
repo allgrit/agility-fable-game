@@ -67,6 +67,28 @@ export class Run {
     this._stepAcc = 0;
     this.hintText = null; // обучающая подсказка при первой встрече механики
     this.hintSlow = 0;    // сек оставшегося slow-mo
+    // Late-commit: фокусы риска. Заявка до окна → окно 35%, очки ×2, промах = 5 фолтов.
+    const maxFocus = 3 + (breed.ability === 'drive' ? 1 : 0);
+    this.focus = { count: maxFocus, max: maxFocus, used: 0, perfectsSince: 0 };
+    this._stubbornUsed = false; // джек: один сейв комбо за прогон
+  }
+
+  // Заявка риска на текущий press-снаряд: только ДО открытия окна.
+  tryRisk() {
+    if (this.phase !== 'running' || this.focus.count <= 0) return false;
+    const m = this.activeMark;
+    if (!m || !m.qte || m.qte.state !== 'active' || m.risk) return false;
+    if (m.qte.def.kind !== 'press' && m.qte.def.kind !== 'doubleTap') return false;
+    const t = this.time - m.qteStart;
+    if (t >= m.qte.target - m.qte.w) return false; // окно уже открыто — поздно
+    m.risk = true;
+    this.focus.count--;
+    this.focus.used++;
+    m.qte.w *= 0.35; // окно сжимается до последних 35%
+    this.popups.push({ text: '⚡ РИСК ×2!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+    this.audio.reveal();
+    this.emit({ type: 'risk' });
+    return true;
   }
 
   emit(e) { this.events.push(e); }
@@ -107,6 +129,7 @@ export class Run {
   // ---------- ВВОД ----------
   input(key, isDown) {
     if (this.phase !== 'running') return;
+    if ((key === 'ShiftLeft' || key === 'ShiftRight') && isDown) { this.tryRisk(); return; }
     // Финишный mash-спурт: после последнего снаряда ←→ попеременно = рывок
     if (this.sprint.active && isDown && (key === 'ArrowLeft' || key === 'ArrowRight')) {
       if (this.sprint.lastKey && this.sprint.lastKey !== key) {
@@ -192,6 +215,8 @@ export class Run {
           // PS-style обманка: только press-QTE, шанс растёт с классом.
           if (nm.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
             nm.decoys = makeDecoys(nm.qte.def.key, this.course.cls);
+            // Шелти: чутьё — обманка раскрывается заметно раньше
+            if (this.breed.ability === 'sense') nm.decoys.reveal *= 1.45;
             nm.decoys.revealAt = nm.qte.target - nm.decoys.reveal;
           }
         }
@@ -429,20 +454,42 @@ export class Run {
       this.r.zoomPunch();
       if (this.score.combo >= 4) this.audio.cheer(false);
       this.audio.crowdLevel(Math.min(0.8, 0.3 + this.score.combo * 0.07));
+      // Риск оправдался: ×2 очков за снаряд
+      if (m.risk) {
+        this.bonusPoints += 120;
+        this.popups.push({ text: '⚡ ×2!', color: '#ff8a65', x: d.x + 1.2, y: d.y - 2.0, t: 0 });
+      }
+      // Восстановление фокуса: 8 перфектов подряд возвращают заявку
+      this.focus.perfectsSince++;
+      if (this.focus.perfectsSince >= 8 && this.focus.count < this.focus.max) {
+        this.focus.count++;
+        this.focus.perfectsSince = 0;
+        this.popups.push({ text: '+⚡ фокус', color: '#8fd8ff', x: d.x, y: d.y - 3.4, t: 0 });
+      }
     } else if (grade === 'good') {
       this.score.goods++;
       this.score.combo += this.breed.comboRate * 0.5;
+      this.focus.perfectsSince = 0;
+      if (m.risk) this.bonusPoints += 40; // смелость вознаграждается и на good
       this.audio.good();
     } else if (grade === 'late') {
       this.score.lates++;
-      this.score.combo = 0;
-      if (hadCombo) { this.desatT = 0.5; this.audio.music?.dip(); }
+      this.focus.perfectsSince = 0;
+      // Джек: упрямство — один сброс комбо за прогон прощается
+      if (hadCombo && this.breed.ability === 'stubborn' && !this._stubbornUsed) {
+        this._stubbornUsed = true;
+        this.popups.push({ text: 'Упрямство!', color: '#9ff0b4', x: d.x, y: d.y - 3.2, t: 0 });
+      } else {
+        this.score.combo = 0;
+        if (hadCombo) { this.desatT = 0.5; this.audio.music?.dip(); }
+      }
       // Планка дрожит от близкого пролёта
       if (m.o.type === 'jump' || m.o.type === 'wall') { m.state.rattle = 0.6; this.audio.creak(); }
       this.audio.crowdLevel(0.25);
     } else {
       this.score.misses++;
       this.score.combo = 0;
+      this.focus.perfectsSince = 0;
       this.score.faults += faults;
       this.slowT = 0.6;
       if (hadCombo) { this.desatT = 0.55; this.audio.music?.dip(); }

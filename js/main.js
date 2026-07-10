@@ -70,6 +70,7 @@ function saveRunToBoard(run, res) {
     stars: res.stars,
     points: res.points,
     clean: res.clean,
+    risks: run.focus?.used || 0, // ⚡ сыгранных заявок риска
   });
   board.sort((a, b) => b.points - a.points);
   board.length = Math.min(board.length, 20);
@@ -337,6 +338,13 @@ canvas.addEventListener('pointerdown', (e) => {
       localStorage.setItem('agility_onboarded', '1');
       startRun();
       return;
+    }
+    // Тап по хендлеру — заявка риска (late-commit)
+    if (app.run.phase === 'running' && app.run.focus?.count > 0) {
+      const hs = renderer.toScreen(app.run.handler.x, app.run.handler.y, 0.8);
+      if (Math.hypot(p.x - hs.x, p.y - hs.y) < renderer.cam.zoom * 1.6) {
+        if (app.run.tryRisk()) return;
+      }
     }
     // Магнит: тап засчитывается ближайшей кнопке в расширенной зоне —
     // промах пальца на пару миллиметров не должен глотать ввод.
@@ -634,7 +642,7 @@ function drawHud(run) {
   ctx.restore();
 
   ctx.save();
-  panel(ctx, w - 230 * z - 14, 14, 230 * z, 88 * z);
+  panel(ctx, w - 230 * z - 14, 14, 230 * z, 112 * z);
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
   ctx.textAlign = 'right'; ctx.textBaseline = 'top';
   ctx.fillStyle = run.score.faults ? '#ff8a8a' : '#fff';
@@ -642,6 +650,13 @@ function drawHud(run) {
   const combo = Math.floor(run.score.combo);
   ctx.fillStyle = combo >= 3 ? '#ffd54a' : '#cfd8dc';
   ctx.fillText(combo > 0 ? `Комбо ×${combo}` : 'Комбо —', w - 30, 56 * z);
+  // Фокусы риска: ⚡ доступные заявки late-commit (Shift / тап по хендлеру)
+  if (run.focus) {
+    ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = run.focus.count > 0 ? '#ff8a65' : 'rgba(255,255,255,0.3)';
+    const bolts = '⚡'.repeat(run.focus.count) + '·'.repeat(run.focus.max - run.focus.count);
+    ctx.fillText(`Риск ${bolts}`, w - 30, 88 * z);
+  }
   ctx.restore();
 
   // Класс и порода (в портрете — под панелями, чтобы не наезжать)
@@ -1272,7 +1287,7 @@ function drawBoard() {
       ctx.fillStyle = i === 0 ? '#ffd54a' : i < 3 ? '#ffe9a8' : '#e8f5ec';
       ctx.font = `${i < 3 ? 'bold ' : ''}${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.textAlign = 'left';
-      ctx.fillText(`${i + 1}. ${e.points}${e.clean ? ' ★Q' : ''}`, px + 24 * z, ry);
+      ctx.fillText(`${i + 1}. ${e.points}${e.clean ? ' ★Q' : ''}${e.risks ? ` ⚡${e.risks}` : ''}`, px + 24 * z, ry);
       ctx.fillText(`${e.time.toFixed(1)}с / ${e.faults}ф`, px + pw * 0.32, ry);
       const label = `${e.breed} · ${e.cls} · ${e.course}`;
       ctx.fillText(label.length > 42 ? label.slice(0, 41) + '…' : label, px + pw * 0.55, ry);
@@ -1852,12 +1867,20 @@ function drawMenu(dt) {
   });
   if (window.__layoutDebug) window.__layoutDebug.startTextY = h * 0.83 - 24 * z;
 
+  // Дар выбранной породы — строкой между карточками и стартом
+  const selBreed = breedList[app.breedIdx];
+  if (selBreed.abilityText && !breedLocked(selBreed)) {
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffcf9e';
+    ctx.fillText(selBreed.abilityText, w / 2, h * 0.795);
+  }
+
   ctx.font = `bold ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
   ctx.fillText('ENTER / клик — на старт!', w / 2, h * 0.83);
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.65)';
-  ctx.fillText('← → выбор породы · ПРОБЕЛ прыжок · ↓ туннель · ←→ слалом · ↑ горка/бум · L — лидерборд', w / 2, h * 0.88);
+  ctx.fillText('← → выбор породы · ПРОБЕЛ прыжок · ↓ туннель · ←→ слалом · ↑ горка/бум · SHIFT риск ×2 · L — лидерборд', w / 2, h * 0.88);
   ctx.fillStyle = '#ffd54a';
   const balanceLine = `🦴 ${meta.bones}   🏵️ ${meta.rosettes}` +
     (app.bestPoints ? `   ·   Рекорд: ${app.bestPoints}` : '') +
@@ -2007,6 +2030,13 @@ function drawResults(run, z) {
         isDaily: app.mode === 'daily', todayStr: todayStr(),
         runOfDay: meta.counters.runsToday.n,
       });
+      // Пудель: дар «шоу» — ×1.5 косточек за прогон
+      if (run.breed.ability === 'show' && earned.bones > 0) {
+        const extra = Math.round(earned.bones * 0.5);
+        meta.bones += extra;
+        earned.bones += extra;
+        earned.detail.push(['дар «шоу» ×1.5', extra]);
+      }
       // Розетки-вехи: первое золото трассы, чистая ЧМ-трасса
       let ros = 0;
       if (res0.stars >= 3) ros += grantRosette(meta, `gold:${trackId}`, 1);
