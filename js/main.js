@@ -294,6 +294,12 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
   if (app.state === 'menu' && inZone(app.chloeZoneMenu)) return openChloe();
+  // Кнопки-стрелки переключателя режима
+  if (app.state === 'menu' && app.modeArrows) {
+    const { left, right } = app.modeArrows;
+    if (Math.hypot(p.x - left.x, p.y - left.y) <= left.r) return menuKey('ArrowUp');
+    if (Math.hypot(p.x - right.x, p.y - right.y) <= right.r) return menuKey('ArrowDown');
+  }
   if (app.state === 'menu') menuClick(p.x, p.y);
   else if (app.state === 'results') {
     // Секвенция ещё идёт — первый тап всегда скип
@@ -361,10 +367,11 @@ function menuClick(x, y) {
     if (y < h * 0.29) menuKey('ArrowDown');
     return;
   }
-  const cardW = Math.min(195, w * 0.178);
+  const L = app.menuLayout || { cardsTop: h * 0.38, cardH: h * 0.34, cardW: Math.min(195, w * 0.178) };
+  const cardW = L.cardW;
   for (let i = 0; i < n; i++) {
     const cx = w / 2 + (i - (n - 1) / 2) * (cardW + 14);
-    if (Math.abs(x - cx) < cardW / 2 && y > h * 0.38 && y < h * 0.72) {
+    if (Math.abs(x - cx) < cardW / 2 && y > L.cardsTop && y < L.cardsTop + L.cardH) {
       if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
       return;
     }
@@ -984,35 +991,74 @@ function drawMenu(dt) {
   ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#8fd8ff';
   const chloeText = '🐾 Игра от аусси Хлои · её дневник ВКонтакте →';
+  // Шапка меню — вертикальный ПОТОК (в единицах z): не налезает при любых пропорциях окна
   const chloeY = h * 0.16 + 70 * z;
   ctx.fillText(chloeText, w / 2, chloeY);
   const ctw = ctx.measureText(chloeText).width;
   app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 15 * z, w: ctw + 20, h: 21 * z };
 
-  // Режим
-  ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+  // Переключатель режима: явные кнопки-стрелки по бокам + точки-индикаторы
+  const modeFs = Math.round((isPortrait() ? 17 : 22) * z);
+  ctx.font = `bold ${modeFs}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#ffd54a';
   let modeName;
   if (app.mode === 'career') {
     modeName = `КАРЬЕРА · ${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   } else if (app.mode === 'worldcup') {
-    modeName = `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
+    modeName = isPortrait() ? `ЧЕМПИОНАТ МИРА (${REAL_COURSES.length})`
+      : `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
   } else {
     const db = dailyBest();
-    modeName = `ТРАССА ДНЯ ${todayStr()} · ${CLASSES[dailyCls()].name}${db != null ? ` · лучший: ${db}` : ''}`;
+    modeName = isPortrait()
+      ? `ТРАССА ДНЯ · ${CLASSES[dailyCls()].name}${db != null ? ` · ${db}` : ''}`
+      : `ТРАССА ДНЯ ${todayStr()} · ${CLASSES[dailyCls()].name}${db != null ? ` · лучший: ${db}` : ''}`;
   }
-  ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.308);
+  const modeY = chloeY + 34 * z;
+  ctx.fillText(modeName, w / 2, modeY);
+  const mw = ctx.measureText(modeName).width;
+  const ar = 16 * z; // радиус кнопок-стрелок
+  const axL = Math.max(ar + 8, w / 2 - mw / 2 - 30 * z);
+  const axR = Math.min(w - ar - 8, w / 2 + mw / 2 + 30 * z);
+  for (const [ax, ch] of [[axL, '‹'], [axR, '›']]) {
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(14,26,20,0.85)';
+    ctx.strokeStyle = 'rgba(255,213,74,0.8)';
+    ctx.lineWidth = 2;
+    ctx.arc(ax, modeY - modeFs * 0.32, ar, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `bold ${Math.round(ar * 1.4)}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ch, ax, modeY - modeFs * 0.32);
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `bold ${modeFs}px "Segoe UI", sans-serif`;
+  }
+  app.modeArrows = {
+    left: { x: axL, y: modeY - modeFs * 0.32, r: ar * 1.5 },
+    right: { x: axR, y: modeY - modeFs * 0.32, r: ar * 1.5 },
+  };
+  // Точки-индикаторы трёх режимов
+  const modesOrder = ['career', 'worldcup', 'daily'];
+  modesOrder.forEach((mo, i) => {
+    ctx.beginPath();
+    ctx.fillStyle = mo === app.mode ? '#ffd54a' : 'rgba(255,255,255,0.35)';
+    ctx.arc(w / 2 + (i - 1) * 16 * z, modeY + 11 * z, 3.4 * z, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
-  // Подстрока: карта карьеры / модификатор дня (в портрете карточки ниже — с 0.36)
-  const subY = isPortrait() ? h * 0.336 : h * 0.338;
+  // Подстрока: карта карьеры / модификатор дня — продолжение потока
+  const subY = modeY + 30 * z;
+  let headerBottom = modeY + 16 * z; // низ точек-индикаторов
   if (app.mode === 'career') {
     drawCareerMap(ctx, w / 2, subY, z, isPortrait());
+    headerBottom = subY + (isPortrait() ? 1 : 2) * 19 * z;
   } else if (app.mode === 'daily') {
     const mod = MODIFIERS[dailyModifier()];
     if (mod.name) {
       ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = '#ffab6b';
       ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, subY);
+      headerBottom = subY + 6 * z;
     }
   }
   // Сводка медалей: не в карьере всегда; в карьере — на портрете (там карта
@@ -1020,21 +1066,26 @@ function drawMenu(dt) {
   if (app.mode !== 'career' || isPortrait()) {
     const mc = medalCounts();
     if (mc[3] + mc[2] + mc[1] > 0) {
+      const medalY = headerBottom + 16 * z;
       ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, isPortrait() ? h * 0.352 : h * 0.362);
+      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, medalY);
+      headerBottom = medalY + 4 * z;
     }
   }
+  // Карточки начинаются после шапки; высота сжимается под доступное место
+  const startTextY = h * 0.83 - 26 * z;
+  const cardsTop = Math.max(isPortrait() ? h * 0.36 : h * 0.38, headerBottom + 14 * z);
   if (window.__layoutDebug) {
-    window.__layoutDebug.modeY = h * 0.308 - 22 * z;
+    window.__layoutDebug.modeY = modeY - 22 * z;
     window.__layoutDebug.subY = subY;
-    window.__layoutDebug.cardsTop = isPortrait() ? h * 0.36 : h * 0.38;
+    window.__layoutDebug.cardsTop = cardsTop;
     window.__layoutDebug.chloe = app.chloeZoneMenu;
   }
 
   // Карточки пород
   if (isPortrait()) {
-    const top = h * 0.36, cardH = h * 0.082, gap = h * 0.008, cardW = w * 0.88;
+    const top = cardsTop, cardH = h * 0.082, gap = h * 0.008, cardW = w * 0.88;
     breedList.forEach((b, i) => {
       const cy = top + i * (cardH + gap), cx = w / 2;
       const sel = i === app.breedIdx;
@@ -1079,9 +1130,11 @@ function drawMenu(dt) {
     ctx.restore();
     return;
   }
-  const cardW = Math.min(195, w * 0.178), cardH = h * 0.34;
+  const cardW = Math.min(195, w * 0.178);
+  const cardH = Math.max(120 * z, Math.min(h * 0.34, startTextY - cardsTop - 14 * z));
+  app.menuLayout = { cardsTop, cardH, cardW };
   breedList.forEach((b, i) => {
-    const cx = w / 2 + (i - (breedList.length - 1) / 2) * (cardW + 14), cy = h * 0.38;
+    const cx = w / 2 + (i - (breedList.length - 1) / 2) * (cardW + 14), cy = cardsTop;
     const sel = i === app.breedIdx;
     const locked = breedLocked(b);
     ctx.save();
@@ -1102,8 +1155,15 @@ function drawMenu(dt) {
     ctx.restore();
     ctx.textAlign = 'center';
     ctx.fillStyle = sel ? '#ffe082' : '#fff';
-    ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx, cy + cardH * 0.62);
+    let nameFs = Math.round(22 * z);
+    ctx.font = `bold ${nameFs}px "Segoe UI", sans-serif`;
+    const nameTxt = `${locked ? '🔒 ' : ''}${b.name}`;
+    const ntw = ctx.measureText(nameTxt).width;
+    if (ntw > cardW - 16) {
+      nameFs = Math.max(11, Math.floor(nameFs * (cardW - 16) / ntw));
+      ctx.font = `bold ${nameFs}px "Segoe UI", sans-serif`;
+    }
+    ctx.fillText(nameTxt, cx, cy + cardH * 0.62);
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     const descBottom = wrapText(ctx, locked ? 'Открой: 5 золотых 🥇' : b.desc,

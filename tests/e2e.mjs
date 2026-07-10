@@ -457,6 +457,36 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   await context.close();
 }
 
+// ---------- МАЛЕНЬКОЕ LANDSCAPE-ОКНО (пол-экрана) ----------
+{
+  console.log('# Маленькое окно 640x380');
+  const { page, context, consoleErrors } = await newPage(browser, { width: 640, height: 380 });
+  const small = await page.evaluate(`(async () => {
+    localStorage.setItem('agility_onboarded', '1');
+    localStorage.setItem('agility_class', 'open');
+    localStorage.setItem('agility_medals', JSON.stringify({ 'c:novice:1': 3, 'c:open:1': 2 }));
+    const A = window.__agility;
+    A.setMode('career'); A.app.state = 'menu';
+    window.__layoutDebug = { cards: [] };
+    await new Promise(r => setTimeout(r, 500));
+    const c = document.getElementById('game');
+    const L = window.__layoutDebug;
+    return {
+      n: L.cards.length,
+      inCanvas: L.cards.every(k => k.x >= -1 && k.x + k.w <= c.width + 1),
+      cardsBelowHeader: L.cards.every(k => k.y >= L.cardsTop - 1),
+      mapAboveCards: L.subY < L.cardsTop,
+      aboveStart: L.startTextY ? L.cards.every(k => k.y + k.h < L.startTextY + 30) : true,
+    };
+  })()`);
+  check('малое окно: карточки под шапкой, карта над ними, всё в экране',
+    small.n === 5 && small.inCanvas && small.cardsBelowHeader && small.mapAboveCards,
+    JSON.stringify(small));
+  await shot(page, 'small-window-menu');
+  check('консоль без ошибок (малое окно)', consoleErrors.length === 0, consoleErrors.join(' | '));
+  await context.close();
+}
+
 await browser.close();
 server.close();
 
