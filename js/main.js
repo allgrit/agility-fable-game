@@ -8,6 +8,7 @@ import { Run } from './game.js';
 import { QTE_DEFS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
 import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
+import { pickTheme, THEMES } from './themes.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -240,6 +241,11 @@ window.addEventListener('keydown', (e) => {
   if (app.state === 'menu') return menuKey(e.code);
   if (app.state === 'results') return resultsKey(e.code);
   if (app.state === 'run') {
+    // Финиш разминки: любой ввод завершает онбординг и запускает настоящий старт
+    if (app.run?.warmup && app.run.phase === 'finished') {
+      localStorage.setItem('agility_onboarded', '1');
+      return startRun();
+    }
     if (e.code === 'Escape') return toMenu();
     if (e.code === 'KeyR') return startRun();
     app.run.input(e.code, true);
@@ -263,6 +269,11 @@ canvas.addEventListener('pointerdown', (e) => {
     if (Math.hypot(p.x - fz.x, p.y - fz.y) < fz.r) { toggleFullscreen(); return; }
   }
   if (app.state === 'run') {
+    if (app.run?.warmup && app.run.phase === 'finished') {
+      localStorage.setItem('agility_onboarded', '1');
+      startRun();
+      return;
+    }
     // Магнит: тап засчитывается ближайшей кнопке в расширенной зоне —
     // промах пальца на пару миллиметров не должен глотать ввод.
     let best = null, bestD = Infinity;
@@ -400,6 +411,8 @@ function startRun() {
     audio.miss();
     return;
   }
+  // Первый запуск: разминка во «Дворе» — 3 снаряда, провалить нельзя
+  if (!localStorage.getItem('agility_onboarded')) return startWarmup();
   let course;
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
@@ -415,6 +428,7 @@ function startRun() {
     course.name = `${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   }
   const mod = MODIFIERS[activeModifier()];
+  renderer.theme = pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
   app.run = new Run({ course, breed, audio, particles: fx, renderer,
     modifier: activeModifier(), windowMul: mod.windowMul || 1 });
   renderer.cam.x = course.start.x;
@@ -424,10 +438,67 @@ function startRun() {
   audio.crowdLevel(0.15);
 }
 
+// Онбординг: «Двор» — jump, jump, tunnel с гигантскими окнами; miss = мягкий повтор.
+function startWarmup() {
+  const course = generateCourse(4242, 'novice', {});
+  course.obstacles = course.obstacles.slice(0, 3);
+  // Состав строго jump → jump → tunnel: сначала одна кнопка, потом вторая
+  const setType = (o, type, len) => {
+    o.type = type; o.len = len;
+    o.exit = { x: o.entry.x + Math.cos(o.angle) * len, y: o.entry.y + Math.sin(o.angle) * len };
+    o.x = (o.entry.x + o.exit.x) / 2; o.y = (o.entry.y + o.exit.y) / 2;
+  };
+  if (course.obstacles[0].type !== 'jump') setType(course.obstacles[0], 'jump', 0.4);
+  if (course.obstacles[1].type !== 'jump') setType(course.obstacles[1], 'jump', 0.4);
+  const t3 = course.obstacles[2];
+  if (t3.type !== 'tunnel') setType(t3, 'tunnel', 5.0);
+  course.finish = {
+    x: t3.exit.x + Math.cos(t3.angle) * 5,
+    y: t3.exit.y + Math.sin(t3.angle) * 5,
+  };
+  course.pathPoints = [course.start];
+  for (const o of course.obstacles) course.pathPoints.push(o.entry, o.exit);
+  course.pathPoints.push(course.finish);
+  course.name = 'Разминка во дворе';
+  renderer.theme = THEMES.day;
+  app.run = new Run({ course, breed: breedList[app.breedIdx], audio, particles: fx, renderer,
+    windowMul: 1.9 });
+  app.run.warmup = true; // мягкий режим: без фолтов, с повторами
+  renderer.cam.x = course.start.x;
+  renderer.cam.y = course.start.y;
+  app.state = 'run';
+  app.result = null;
+  audio.crowdLevel(0.1);
+}
+
 // ---------- HUD ----------
 function drawHud(run) {
   const ctx = renderer.ctx, w = canvas.width;
   const z = Math.min(w, canvas.height) / 700;
+
+  // Разминка: чистый экран без панелей — только суть. Финал — приглашение на старт.
+  if (run.warmup) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText('🐾 Разминка во дворе', w / 2, 30 * z);
+    if (run.phase === 'finished' && run.finishT > 0.8) {
+      ctx.fillStyle = 'rgba(6,12,10,0.6)';
+      ctx.fillRect(0, 0, w, canvas.height);
+      ctx.font = `900 ${Math.round(38 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#ffd54a';
+      ctx.fillText('Ты готов к соревнованиям!', w / 2, canvas.height * 0.42);
+      ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
+      ctx.fillText(IS_TOUCH ? 'Тап — на старт!' : 'Любая клавиша — на старт!', w / 2, canvas.height * 0.5);
+    }
+    ctx.restore();
+    const wm = run.activeMark;
+    if (wm && wm.qte && wm.qte.state === 'active' && run.phase === 'running') drawQte(run, wm, z);
+    if (IS_TOUCH) drawTouchControls(run);
+    return;
+  }
 
   // Верхняя панель: снаряды, время, фолты, комбо
   ctx.save();
@@ -1362,7 +1433,7 @@ function frame(now) {
     app.run.draw();
     drawHud(app.run);
     const z = Math.min(canvas.width, canvas.height) / 700;
-    if (app.run.phase === 'finished' && app.run.finishT > 0.4) {
+    if (app.run.phase === 'finished' && app.run.finishT > 0.4 && !app.run.warmup) {
       app.state = 'results';
     }
     if (app.state === 'results') drawResults(app.run, z);

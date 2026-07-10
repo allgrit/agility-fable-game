@@ -91,7 +91,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 
   // Полный чистый прогон Novice→результаты→лидерборд/медали/достижения
   const r1 = await page.evaluate(`(async () => {
-    localStorage.clear();
+    localStorage.clear(); localStorage.setItem('agility_onboarded', '1');
     const A = window.__agility;
     A.app.cls = 'novice'; A.app.stage = 1; A.setMode('career');
     A.startRun();
@@ -222,6 +222,47 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   check('старт запертым пуделем заблокирован',
     poodle.afterSecond?.state === 'menu', JSON.stringify(poodle));
 
+  // Онбординг: первый запуск = разминка, miss прощается повтором, финиш ведёт на старт
+  const warmup = await page.evaluate(`(async () => {
+    localStorage.removeItem('agility_onboarded');
+    const A = window.__agility;
+    A.setMode('career'); A.app.cls = 'novice'; A.app.stage = 1; A.app.breedIdx = 0;
+    A.startRun();
+    const run = A.app.run;
+    if (!run || !run.warmup) return { error: 'не разминка' };
+    const proto = Object.getPrototypeOf(run);
+    run.update = () => {};
+    let guard = 0, missed = false;
+    while (guard++ < 20000 && run.phase !== 'finished') {
+      const m = run.activeMark;
+      if (m && m.qte && m.qte.state === 'active') {
+        const q = m.qte, t = run.time - m.qteStart, d = q.def;
+        if (missed && d.kind === 'press' && t >= q.target - 0.01) run.input(d.key, true);
+        // до missed — молчим: первый QTE протухает и должен мягко повториться
+      } else if (!missed && run.marks[0] && !run.marks[0].resolved && !run.marks[0].qte) {
+        missed = true;
+      }
+      proto.update.call(run, 1 / 60);
+    }
+    const faultsInWarmup = run.score.faults;
+    run.finishT = 1.5;
+    delete run.update;
+    await new Promise(r => setTimeout(r, 300));
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
+    await new Promise(r => setTimeout(r, 300));
+    return {
+      warmupObstacles: run.marks.length,
+      faultsInWarmup,
+      onboarded: localStorage.getItem('agility_onboarded'),
+      afterState: A.app.state,
+      afterWarmup: A.app.run && !A.app.run.warmup,
+    };
+  })()`);
+  check('онбординг: разминка из 3 снарядов, промах без фолта, переход на старт',
+    warmup.warmupObstacles === 3 && warmup.faultsInWarmup === 0
+    && warmup.onboarded === '1' && warmup.afterState === 'run' && !!warmup.afterWarmup,
+    JSON.stringify(warmup));
+
   check('консоль без ошибок (десктоп)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
 }
@@ -248,7 +289,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 
   // Подсказка слалома: все строки баннера влезают в ширину
   const hintFit = await page.evaluate(`(async () => {
-    localStorage.clear();
+    localStorage.clear(); localStorage.setItem('agility_onboarded', '1');
     const A = window.__agility;
     A.app.cls = 'novice'; A.app.stage = 3; A.setMode('career');
     A.startRun();

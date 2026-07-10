@@ -63,12 +63,15 @@ export class Particles {
     const colors = ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb', '#ffab40'];
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 7;
+      const ribbon = i % 5 === 0; // 20% — ленты: медленнее падают, сильнее кувыркаются
       this.spawn({
         x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 4,
-        decay: 0.35 + Math.random() * 0.2, grav: 4, drag: 0.98,
-        rot: Math.random() * 6, vr: (Math.random() - 0.5) * 15,
-        size: 0.16 + Math.random() * 0.12,
-        color: colors[i % colors.length], kind: 'confetti',
+        decay: ribbon ? 0.25 : 0.35 + Math.random() * 0.2,
+        grav: ribbon ? 2.2 : 4, drag: ribbon ? 0.955 : 0.98,
+        rot: Math.random() * 6, vr: (Math.random() - 0.5) * (ribbon ? 26 : 15),
+        size: ribbon ? 0.3 + Math.random() * 0.15 : 0.16 + Math.random() * 0.12,
+        flutter: Math.random() * 6,
+        color: colors[i % colors.length], kind: ribbon ? 'ribbon' : 'confetti',
       });
     }
   }
@@ -102,6 +105,10 @@ export class Particles {
         ctx.fillRect(-px * 0.4, -px * 0.12, px * 0.5, px * 0.24);
       } else if (p.kind === 'confetti') {
         ctx.fillRect(-px / 2, -px / 4, px, px / 2);
+      } else if (p.kind === 'ribbon') {
+        // Лента: узкая полоса с волной-флаттером
+        const wobble = Math.sin(p.life * 9 + (p.flutter || 0)) * px * 0.25;
+        ctx.fillRect(-px, -px * 0.09 + wobble * 0.3, px * 2, px * 0.18);
       } else {
         ctx.beginPath(); ctx.arc(0, 0, px, 0, Math.PI * 2); ctx.fill();
       }

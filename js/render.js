@@ -9,6 +9,8 @@ export class Renderer {
     this.ctx = canvas.getContext('2d');
     this.cam = { x: 26, y: 18, zoom: 24, shake: 0 };
     this.time = 0;
+    this.theme = { outer: '#1d5c30', grass: '#2e7d43', stripeAlpha: 0.05, overlay: null, lights: false };
+    this.crowdFocusX = 26; // волна толпы расходится от позиции собаки
   }
 
   resize(w, h) { this.canvas.width = w; this.canvas.height = h; }
@@ -40,27 +42,50 @@ export class Renderer {
   // ---------- ПОЛЕ ----------
   drawField(field, crowdHype) {
     const { ctx } = this;
-    ctx.fillStyle = '#1d5c30';
+    const th = this.theme;
+    ctx.fillStyle = th.outer;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     // Полосы газона
     for (let i = 0; i < field.w; i += 4) {
       const a = this.toScreen(i, 0), b = this.toScreen(Math.min(i + 2, field.w), field.h);
-      ctx.fillStyle = 'rgba(255,255,255,0.045)';
+      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha * 0.9})`;
       ctx.fillRect(a.x, this.toScreen(0, -3).y, b.x - a.x, this.toScreen(0, field.h + 6).y - this.toScreen(0, -3).y);
     }
-    // Песчаный ринг с кромкой
+    // Ринг с кромкой
     const p0 = this.toScreen(0, 0), p1 = this.toScreen(field.w, field.h);
-    ctx.fillStyle = '#2e7d43';
+    ctx.fillStyle = th.grass;
     ctx.fillRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
     for (let i = 0; i < field.w; i += 4) {
       const a = this.toScreen(i, 0), b = this.toScreen(Math.min(i + 2, field.w), field.h);
-      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha})`;
       ctx.fillRect(a.x, p0.y, b.x - a.x, p1.y - p0.y);
+    }
+    // Прожекторы вечернего турнира
+    if (th.lights) {
+      for (const lx of [field.w * 0.2, field.w * 0.45, field.w * 0.7, field.w * 0.92]) {
+        const s = this.toScreen(lx, field.h * 0.45);
+        const r = this.cam.zoom * 7;
+        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r);
+        g.addColorStop(0, 'rgba(255,245,200,0.13)');
+        g.addColorStop(1, 'rgba(255,245,200,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(s.x - r, s.y - r, r * 2, r * 2);
+      }
     }
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = Math.max(2, this.cam.zoom * 0.06);
     ctx.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
     this._drawCrowd(field, crowdHype);
+  }
+
+  // Тонирующий оверлей темы — вызывается после отрисовки мира
+  drawThemeOverlay() {
+    if (!this.theme.overlay) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.fillStyle = this.theme.overlay;
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.restore();
   }
 
   _drawCrowd(field, hype = 0) {
@@ -71,7 +96,11 @@ export class Renderer {
       for (let i = 0; i < field.w; i += 1.6) {
         const seed = Math.sin(i * 12.7 + row * 5.1) * 43758.5;
         const rnd = seed - Math.floor(seed);
-        const bounce = Math.max(0, Math.sin(this.time * (3 + rnd * 3) + i * 2)) * hype * 0.35;
+        // Волна оваций расходится от позиции собаки (crowdFocusX)
+        const dist = Math.abs(i - this.crowdFocusX);
+        const bounce = Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
+          // Вздрагивание всей трибуны при сильной тряске (сбитая планка)
+          - (this.cam.shake > 0.3 ? 0.25 : 0);
         for (const yy of [off, field.h - off]) {
           const s = this.toScreen(i + (row ? 0.8 : 0), yy, 0.5 + bounce);
           const r = this.cam.zoom * 0.22;
@@ -137,7 +166,7 @@ export class Renderer {
     const num = state.done ? null : String(o.i);
     if (o.skipGeom) {
       // Повторное прохождение того же снаряда: геометрия уже нарисована, только номер.
-      if (num) this._numberTag(o, num, state.active);
+      if (num) this._numberTag(o, num, state.active, state.doneT);
       return;
     }
 
@@ -208,7 +237,8 @@ export class Renderer {
         break;
       }
       case 'tunnel': {
-        // Изогнутая труба: дуга от entry к exit с боковым смещением
+        // Изогнутая труба: дуга от entry к exit с боковым смещением.
+        // Пока собака внутри — по трубе бежит выпуклость.
         const bend = 2.2 * (o.i % 2 ? 1 : -1);
         const mid = { x: o.x + px * bend, y: o.y + py * bend };
         const steps = 14;
@@ -219,8 +249,9 @@ export class Renderer {
           const qy = a * a * o.entry.y + 2 * a * b * mid.y + b * b * o.exit.y;
           const s = this.toScreen(qx, qy, 0.4);
           const z = this.cam.zoom;
+          const bulge = state.dogInside ? Math.max(0, Math.sin(this.time * 9 - k * 0.75)) * 0.09 : 0;
           ctx.fillStyle = k === 0 || k === steps ? '#12333d' : (k % 2 ? '#2196a8' : '#1b7f90');
-          ctx.beginPath(); ctx.arc(s.x, s.y, z * 0.5, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(s.x, s.y, z * (0.5 + bulge), 0, Math.PI * 2); ctx.fill();
         }
         break;
       }
@@ -330,14 +361,34 @@ export class Renderer {
         break;
       }
     }
-    if (num) this._numberTag(o, num, state.active);
+    if (num) this._numberTag(o, num, state.active, state.doneT);
   }
 
-  _numberTag(o, num, active) {
+  _numberTag(o, num, active, doneT) {
     const { ctx } = this;
     const dx = Math.cos(o.angle), dy = Math.sin(o.angle);
     const s = this.toScreen(o.x - dy * 1.5, o.y + dx * 1.5, 0.4);
-    const z = this.cam.zoom, r = z * (active ? 0.34 : 0.26);
+    const z = this.cam.zoom;
+    // Пройденный снаряд: номер лопается в зелёную галочку
+    if (doneT !== undefined && doneT >= 0) {
+      const k = Math.min(1, doneT / 0.35);
+      const pop = 1 + Math.sin(k * Math.PI) * 0.45;
+      const r = z * 0.28 * pop;
+      ctx.save();
+      ctx.globalAlpha = doneT > 1.2 ? Math.max(0.35, 1 - (doneT - 1.2) * 0.5) : 1;
+      ctx.fillStyle = '#4caf6d';
+      ctx.strokeStyle = '#2a6a42'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, r * 0.22); ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.42, s.y);
+      ctx.lineTo(s.x - r * 0.08, s.y + r * 0.36);
+      ctx.lineTo(s.x + r * 0.46, s.y - r * 0.32);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    const r = z * (active ? 0.34 : 0.26);
     ctx.fillStyle = active ? '#ffd54a' : 'rgba(255,255,255,0.92)';
     ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -397,11 +448,13 @@ export class Renderer {
       ctx.lineTo(lx + Math.sin(swing) * 7, 9 + Math.abs(Math.cos(swing)) * 2);
       ctx.stroke();
     }
-    // Хвост
-    const wag = Math.sin(this.time * (dog.happy ? 18 : 8)) * (dog.happy ? 7 : 3);
+    // Хвост: радость — виляет, после ошибки (sadT) — поджат вниз
+    const sad = dog.sadT > 0;
+    const wag = sad ? 1 : Math.sin(this.time * (dog.happy ? 18 : 8)) * (dog.happy ? 7 : 3);
     ctx.strokeStyle = breed.body; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(-13, -3);
-    ctx.quadraticCurveTo(-19, -8 + wag * 0.4, -21, -5 + wag);
+    if (sad) ctx.quadraticCurveTo(-17, 3, -18, 8);
+    else ctx.quadraticCurveTo(-19, -8 + wag * 0.4, -21, -5 + wag);
     ctx.stroke();
     // Тело
     ctx.fillStyle = breed.body;
@@ -473,8 +526,8 @@ export class Renderer {
     } else {
       ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.1, 0, Math.PI * 2); ctx.fill(); // глаз
     }
-    // Уши (реагируют на скорость/полёт)
-    const earBack = dog.airborne ? 0.8 : speedK * 0.5;
+    // Уши: торчком в ожидании команды (alert), назад на скорости/в полёте
+    const earBack = dog.alert ? -0.35 : dog.airborne ? 0.8 : speedK * 0.5;
     ctx.fillStyle = breed.ear;
     for (const side of [-1, 1]) {
       ctx.save();

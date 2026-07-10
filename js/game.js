@@ -208,7 +208,17 @@ export class Run {
       if (m.o.type === 'weave' && d.dist > m.entryD - 0.5) target = Math.min(target, 2.4);
     }
     if (m && m.refusalT > 0) { m.refusalT -= dt; target = 0.4; }
-    for (const mm of this.marks) if (mm.state.rattle > 0) mm.state.rattle -= dt;
+    for (const mm of this.marks) {
+      if (mm.state.rattle > 0) mm.state.rattle -= dt;
+      if (mm.state.doneT !== undefined) mm.state.doneT += dt;
+      mm.state.dogInside = mm.o.type === 'tunnel' && d.hidden
+        && d.dist >= mm.entryD && d.dist <= mm.exitD;
+    }
+    // Уши торчком при активной команде, хвост поджат после ошибки
+    d.alert = !!(m && m.qte && m.qte.state === 'active');
+    if (d.sadT > 0) d.sadT -= dt;
+    if (this.judgeArmT > 0) this.judgeArmT -= dt;
+    this.r.crowdFocusX = d.x;
     d.speed += (target - d.speed) * Math.min(1, dt * 5);
     d.dist += d.speed * dt;
 
@@ -287,7 +297,22 @@ export class Run {
   }
 
   _applyResult(m, res) {
+    // Разминка: провалить нельзя — промах превращается в мягкий повтор захода
+    if (this.warmup && res.grade === 'miss') {
+      this.handler.commanding = false;
+      this.popups.push({ text: 'Ничего, ещё раз!', color: '#9ff0b4', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+      this.audio.good();
+      m.qte = null;
+      m.state.active = false;
+      m.state.knocked = false;
+      this.activeIdx = -1;
+      const v = Math.max(this.dog.speed, 3);
+      this.dog.dist = Math.max(0, m.entryD - TAKEOFF - QTE_DEFS[m.o.type].lead * v - 2);
+      this.slowT = 0.3;
+      return;
+    }
     m.resolved = true;
+    m.state.doneT = 0; // номер лопается в галочку
     this.handler.commanding = false;
     const d = this.dog;
     const { grade, faults, label } = res;
@@ -331,6 +356,8 @@ export class Run {
       this.audio.crowdLevel(0.15);
       this.r.shake(0.55);
       this.r.kick(Math.cos(d.heading) * 8, Math.sin(d.heading) * 6);
+      d.sadT = 1.6;          // хвост поджат
+      this.judgeArmT = 1.2;  // судья фиксирует фолт рукой
       const isKnock = (m.o.type === 'jump' || m.o.type === 'wall') && label !== 'Отказ!';
       if (isKnock) {
         m.state.knocked = true;
@@ -483,7 +510,8 @@ export class Run {
     this.fx.drawGround(ctx, (x, y) => r.toScreen(x, y)); // следы лап — под всем
     r.drawStartFinish(this.course.start, 'СТАРТ');
     r.drawStartFinish(this.course.finish, 'ФИНИШ');
-    r.drawJudge(this.course.field.w - 6, 5, this.phase === 'countdown' && this.countdownT < 1.4);
+    r.drawJudge(this.course.field.w - 6, 5,
+      (this.phase === 'countdown' && this.countdownT < 1.4) || this.judgeArmT > 0);
 
 
     // Снаряды в порядке y; собака рисуется поверх снаряда, на котором стоит.
@@ -577,6 +605,27 @@ export class Run {
       ctx.restore();
     }
 
+    // Тонировка темы (закат/вечер/пасмурно)
+    r.drawThemeOverlay();
+
+    // Спидлайны на разогнанном комбо
+    if (this.score.combo >= 6 && this.phase === 'running') {
+      ctx.save();
+      const W = r.canvas.width, H = r.canvas.height;
+      ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 10; i++) {
+        const seed = Math.sin(i * 91.7 + Math.floor(r.time * 12)) * 43758.5;
+        const rr = seed - Math.floor(seed);
+        const ang = rr * Math.PI * 2;
+        const edge = Math.min(W, H) * 0.5;
+        const x0 = W / 2 + Math.cos(ang) * edge * 0.92, y0 = H / 2 + Math.sin(ang) * edge * 0.92;
+        const x1 = W / 2 + Math.cos(ang) * edge * (0.7 - rr * 0.1), y1 = H / 2 + Math.sin(ang) * edge * (0.7 - rr * 0.1);
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // Десатурация на полсекунды при потере комбо — мир «гаснет»
     if (this.desatT > 0) {
       ctx.save();
@@ -601,12 +650,13 @@ export class Run {
       ctx.restore();
     }
 
-    // Всплывающие оценки
+    // Всплывающие оценки (появление с overshoot-скейлом)
     for (const p of this.popups) {
       const s = r.toScreen(p.x, p.y, 1.2 + p.t * 1.4);
+      const pop = p.t < 0.18 ? 0.5 + (p.t / 0.18) * 0.75 : 1.25 - Math.min(0.25, (p.t - 0.18) * 1.4);
       ctx.save();
       ctx.globalAlpha = Math.max(0, 1 - p.t * 0.9);
-      ctx.font = `900 ${Math.round(r.cam.zoom * (0.62 - p.t * 0.1))}px "Segoe UI", sans-serif`;
+      ctx.font = `900 ${Math.round(r.cam.zoom * (0.62 - p.t * 0.1) * pop)}px "Segoe UI", sans-serif`;
       ctx.textAlign = 'center';
       ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.strokeText(p.text, s.x, s.y);
