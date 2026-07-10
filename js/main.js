@@ -144,6 +144,11 @@ function medalCounts() {
 const breedList = Object.values(BREEDS);
 const breedLocked = (b) => b.unlockAch && !hasAch(b.unlockAch);
 const toasts = []; // {icon, name, desc, t}
+const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
+function openChloe() {
+  audio.click();
+  window.open(CHLOE_URL, '_blank', 'noopener');
+}
 
 // DPR-рендер: чёткая картинка на ретине; все hit-тесты в canvas-координатах.
 const DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -276,10 +281,13 @@ canvas.addEventListener('pointerdown', (e) => {
   if (app.state === 'menu' && Math.hypot(p.x - tz.x, p.y - tz.y) < tz.r) {
     app.state = 'board'; audio.click(); return;
   }
+  const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
+  if (app.state === 'menu' && inZone(app.chloeZoneMenu)) return openChloe();
   if (app.state === 'menu') menuClick(p.x, p.y);
   else if (app.state === 'results') {
     // Секвенция ещё идёт — первый тап всегда скип
     if (app.run && app.run.finishT < 3.4) { app.run.finishT = 3.4; audio.click(); return; }
+    if (inZone(app.chloeZoneResults)) return openChloe();
     if (IS_TOUCH) {
       const w2 = canvas.width, h2 = canvas.height;
       const z2 = Math.min(w2, h2) / 700;
@@ -900,7 +908,15 @@ function drawMenu(dt) {
   ctx.fillText('AGILITY TRIAL!', w / 2, h * 0.16);
   ctx.font = `${Math.round(20 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#e0f2e9';
-  ctx.fillText('Ты — собака. Слушай хендлера и жми верные клавиши вовремя!', w / 2, h * 0.16 + 52 * z);
+  ctx.fillText('Ты — собака. Слушай хендлера и жми верные клавиши вовремя!', w / 2, h * 0.16 + 46 * z);
+  // Промо: игра от аусси Хлои — кликабельная ссылка на её дневник
+  ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#8fd8ff';
+  const chloeText = '🐾 Игра от аусси Хлои · её дневник ВКонтакте →';
+  const chloeY = h * 0.16 + 70 * z;
+  ctx.fillText(chloeText, w / 2, chloeY);
+  const ctw = ctx.measureText(chloeText).width;
+  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 16 * z, w: ctw + 20, h: 26 * z };
 
   // Режим
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
@@ -914,17 +930,17 @@ function drawMenu(dt) {
     const db = dailyBest();
     modeName = `ТРАССА ДНЯ ${todayStr()} · ${CLASSES[dailyCls()].name}${db != null ? ` · лучший: ${db}` : ''}`;
   }
-  ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.28);
+  ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.295);
 
   // Подстрока: карта карьеры / модификатор дня
   if (app.mode === 'career') {
-    drawCareerMap(ctx, w / 2, h * 0.315, z, isPortrait());
+    drawCareerMap(ctx, w / 2, h * 0.328, z, isPortrait());
   } else if (app.mode === 'daily') {
     const mod = MODIFIERS[dailyModifier()];
     if (mod.name) {
       ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = '#ffab6b';
-      ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, h * 0.315);
+      ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, h * 0.328);
     }
   }
   // Сводка медалей (в карьере медали видны на карте)
@@ -933,7 +949,7 @@ function drawMenu(dt) {
     if (mc[3] + mc[2] + mc[1] > 0) {
       ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, h * 0.345);
+      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, h * 0.355);
     }
   }
 
@@ -1228,6 +1244,21 @@ function drawResults(run, z) {
     ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
   }
 
+  // Промо Хлои: после провала — поддержка, после победы — приглашение в дневник
+  if (ft > 2.8) {
+    const chloeMsg = res.qualified
+      ? '🐾 Хлоя гордится тобой! Её дневник →'
+      : '🐾 Хлоя верит в тебя! Загляни в её дневник →';
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#8fd8ff';
+    const cy2 = py + (IS_TOUCH ? 400 : 400) * z;
+    ctx.fillText(chloeMsg, w / 2, cy2);
+    const ctw2 = ctx.measureText(chloeMsg).width;
+    app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 10, y: cy2 - 16 * z, w: ctw2 + 20, h: 26 * z };
+  } else {
+    app.chloeZoneResults = null;
+  }
+
   if (ft > 1.0) {
     const nextText = app.mode === 'career'
       ? (res.qualified
@@ -1284,7 +1315,8 @@ function shareResult() {
   const stars = '⭐'.repeat(res.stars) || '—';
   const txt = `🐕 Agility Trial! · ${run.course.name || 'Трасса'} · ${run.time.toFixed(2)}с ${stars}` +
     `${res.clean ? ' · Q!' : ''} · комбо ×${run.score.maxCombo} · ${res.points} очков\n` +
-    'https://allgrit.github.io/agility-fable-game/';
+    'https://allgrit.github.io/agility-fable-game/\n' +
+    `Игра от аусси Хлои 🐾 ${CHLOE_URL}`;
   // Мобильные: родное окно шаринга (Android/iOS); десктоп: буфер + PNG
   if (navigator.share) {
     navigator.share({ text: txt }).catch(() => {});
