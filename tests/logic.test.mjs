@@ -335,3 +335,28 @@ test('косметика: витрина дня детерминирована, 
   const notOwned = applyEquip(breed, { coat: 'coat-border-red' }, {});
   assert.equal(notOwned.body, '#111');
 });
+
+test('каталог косметики валиден: id уникальны, слоты/редкости известны, окрасы полны', async () => {
+  const { ITEMS, RARITY, SLOT_NAMES } = await import('../js/cosmetics.js');
+  const { BREEDS } = await import('../js/scoring.js');
+  const ids = new Set();
+  for (const it of ITEMS) {
+    assert.ok(!ids.has(it.id), `дубль id ${it.id}`);
+    ids.add(it.id);
+    assert.ok(RARITY[it.rarity], `${it.id}: редкость ${it.rarity}`);
+    assert.ok(SLOT_NAMES[it.slot], `${it.id}: слот ${it.slot}`);
+    if (it.slot === 'coat') {
+      assert.ok(it.palette && it.palette.body, `${it.id}: у окраса есть palette.body`);
+      if (it.breed) assert.ok(BREEDS[it.breed], `${it.id}: порода ${it.breed} существует`);
+    }
+  }
+  // Не-мерльные окрасы аусси гасят мерль базы (merle: null перекрывает spread)
+  const chloe = BREEDS.aussie;
+  assert.ok(chloe.merle, 'база Хлои — мерль');
+  const redtri = applyEquip({ ...chloe }, { coat: 'coat-aussie-redtri' }, { 'coat-aussie-redtri': 1 });
+  assert.equal(redtri.merle, null);
+  assert.ok(redtri.tan, 'у ред-три есть подпал');
+  const blackbi = applyEquip({ ...chloe }, { coat: 'coat-aussie-blackbi' }, { 'coat-aussie-blackbi': 1 });
+  assert.equal(blackbi.merle, null);
+  assert.equal(blackbi.tan, null);
+});

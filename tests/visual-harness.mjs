@@ -40,6 +40,14 @@ const RUNNER = `(async (opts) => {
   if (opts.stage) A.app.stage = opts.stage;
   if (opts.realIdx !== undefined) A.app.realIdx = opts.realIdx;
   A.app.breedIdx = opts.breedIdx ?? 3; // Хлоя по умолчанию — виден мерль
+  if (opts.equip) { // окрас/экипировка: выдаём предмет и надеваем перед стартом
+    for (const [slot, id] of Object.entries(opts.equip)) {
+      A.meta.owned[id] = 1;
+      const breedId = ['border','sheltie','jack','aussie','poodle'][A.app.breedIdx];
+      if (!A.meta.dogs[breedId]) A.meta.dogs[breedId] = { xp: 0, level: 1, equip: {} };
+      A.meta.dogs[breedId].equip[slot] = id;
+    }
+  }
   A.startRun();
   const run = A.app.run;
   const proto = Object.getPrototypeOf(run);
@@ -153,13 +161,25 @@ const SCENES = [
     predicate: 'false', thenFinishT: 4,
     criteria: 'Полный протокол: вердикт, 3 звезды, все строки, медаль, «+N 🦴 +XP», XP-бар с уровнем, строка Хлои, конфетти в фоне.',
   },
+  {
+    name: '14-coat-redtri', mode: 'career', cls: 'novice', stage: 1,
+    equip: { coat: 'coat-aussie-redtri' },
+    predicate: "q && q.state==='active' && q.def.kind==='press' && (() => { const v=Math.max(run.dog.speed,.5); const dd=m.entryD-1.3-run.dog.dist; return Math.abs(dd)<=q.w*0.6*v; })()",
+    criteria: 'Хлоя в окрасе ред-три: рыже-ливерное тело, белая грудь, БЕЗ мраморных пятен мерля, подпал на морде/лапах.',
+  },
+  {
+    name: '15-coat-lilac-border', mode: 'career', cls: 'novice', stage: 1, breedIdx: 0,
+    equip: { coat: 'coat-border-lilac' },
+    predicate: "q && q.state==='active' && q.def.kind==='press' && (() => { const v=Math.max(run.dog.speed,.5); const dd=m.entryD-1.3-run.dog.dist; return Math.abs(dd)<=q.w*0.6*v; })()",
+    criteria: 'Бордер-колли в окрасе лайлак: серо-бежевое (пыльно-розоватое) тело вместо чёрного, белая грудь.',
+  },
 ];
 
 const manifest = [];
 for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
-    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx,
-    predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT,
+    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx,
+    predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
   })})`);
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)

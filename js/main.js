@@ -799,7 +799,15 @@ function drawShop() {
   const cw = (pw - 32 * z) / cols, chh = 62 * z;
   const equip = dogState(meta, breed.id).equip;
   app.shopCells = [];
-  ITEMS.forEach((it, i) => {
+  // Только применимое к выбранной породе: чужие окрасы не показываем,
+  // иначе каталог не влезает в панель (лишние ряды обрезались молча).
+  // Группируем по слотам — окрасы первыми, чтобы на портретной обрезке
+  // не терялись предметы своей породы.
+  const slotOrder = { coat: 0, neck: 1, paws: 2, finish: 3, handler: 4, ring: 5 };
+  const visibleItems = ITEMS
+    .filter(it => it.slot !== 'coat' || !it.breed || it.breed === breed.id)
+    .sort((a, b) => (slotOrder[a.slot] ?? 9) - (slotOrder[b.slot] ?? 9));
+  visibleItems.forEach((it, i) => {
     const col = i % cols, row = Math.floor(i / cols);
     const x = px + 16 * z + col * cw, y = py + 76 * z + row * (chh + 6 * z);
     if (y + chh > py + ph - 40 * z) return;

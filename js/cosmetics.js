@@ -72,6 +72,28 @@ export const ITEMS = [
     shirt: '#c9a227' },
   { id: 'ring-beach', slot: 'ring', name: 'Ринг: пляж', rarity: 'legendary',
     theme: { outer: '#c8b077', grass: '#dbc389', stripeAlpha: 0.05, overlay: 'rgba(255,220,150,0.10)', lights: false } },
+
+  // --- Волна 3: реальные окрасы бордер-колли и аусси (стандарты AKC/ASCA) ---
+  // Бордер: шоко (bb-ливер), ред-мерль, лайлак (двойной дилют bb+dd),
+  // слейт (дилют чёрного), голд (ee-red)
+  { id: 'coat-border-choco', slot: 'coat', breed: 'border', name: 'Шоколадный бордер', rarity: 'rare',
+    palette: { body: '#5a3a26', chest: '#f5f0e8', ear: '#43291a' } },
+  { id: 'coat-border-redmerle', slot: 'coat', breed: 'border', name: 'Ред-мерль бордер', rarity: 'epic',
+    palette: { body: '#b08b72', chest: '#f5f0e8', ear: '#8a5638', merle: '#7a4a30' } },
+  { id: 'coat-border-lilac', slot: 'coat', breed: 'border', name: 'Лайлак бордер', rarity: 'epic',
+    palette: { body: '#9c8a80', chest: '#f5f0e8', ear: '#7d6b62' } },
+  { id: 'coat-border-slate', slot: 'coat', breed: 'border', name: 'Слейт бордер', rarity: 'rare',
+    palette: { body: '#6e7580', chest: '#f5f0e8', ear: '#565c66' } },
+  { id: 'coat-border-gold', slot: 'coat', breed: 'border', name: 'Голд бордер', rarity: 'common',
+    palette: { body: '#d8a85c', chest: '#f7f0e0', ear: '#b8863c' } },
+  // Аусси: не-мерльные окрасы гасят мерль базовой Хлои (merle: null),
+  // у ливерных — янтарный глаз вместо голубого
+  { id: 'coat-aussie-redtri', slot: 'coat', breed: 'aussie', name: 'Ред-три Хлоя', rarity: 'rare',
+    palette: { body: '#8a4f2c', chest: '#f7f5f0', ear: '#6b3a1e', tan: '#d09a5a', merle: null, eye: '#b8863c' } },
+  { id: 'coat-aussie-blackbi', slot: 'coat', breed: 'aussie', name: 'Блэк-би Хлоя', rarity: 'common',
+    palette: { body: '#26262c', chest: '#f7f5f0', ear: '#17171c', tan: null, merle: null, eye: '#8fd8ff' } },
+  { id: 'coat-aussie-redbi', slot: 'coat', breed: 'aussie', name: 'Ред-би Хлоя', rarity: 'common',
+    palette: { body: '#7a4a30', chest: '#f7f5f0', ear: '#5d3722', tan: null, merle: null, eye: '#b8863c' } },
 ];
 
 export const SLOT_NAMES = { coat: 'Окрас', neck: 'Шея', paws: 'Следы', finish: 'Финиш', handler: 'Хендлер', ring: 'Ринг' };
