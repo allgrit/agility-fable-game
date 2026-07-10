@@ -338,7 +338,7 @@ function menuClick(x, y) {
   const w = canvas.width, h = canvas.height;
   const n = breedList.length;
   if (isPortrait()) {
-    const top = h * 0.325, cardH = h * 0.088, gap = h * 0.01;
+    const top = h * 0.36, cardH = h * 0.082, gap = h * 0.008;
     for (let i = 0; i < n; i++) {
       const cy = top + i * (cardH + gap);
       if (y > cy && y < cy + cardH && Math.abs(x - w / 2) < w * 0.44) {
@@ -916,7 +916,7 @@ function drawMenu(dt) {
   const chloeY = h * 0.16 + 70 * z;
   ctx.fillText(chloeText, w / 2, chloeY);
   const ctw = ctx.measureText(chloeText).width;
-  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 16 * z, w: ctw + 20, h: 26 * z };
+  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 15 * z, w: ctw + 20, h: 21 * z };
 
   // Режим
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
@@ -930,32 +930,40 @@ function drawMenu(dt) {
     const db = dailyBest();
     modeName = `ТРАССА ДНЯ ${todayStr()} · ${CLASSES[dailyCls()].name}${db != null ? ` · лучший: ${db}` : ''}`;
   }
-  ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.295);
+  ctx.fillText(`⟨ ↑↓ ⟩  ${modeName}`, w / 2, h * 0.308);
 
-  // Подстрока: карта карьеры / модификатор дня
+  // Подстрока: карта карьеры / модификатор дня (в портрете карточки ниже — с 0.36)
+  const subY = isPortrait() ? h * 0.336 : h * 0.338;
   if (app.mode === 'career') {
-    drawCareerMap(ctx, w / 2, h * 0.328, z, isPortrait());
+    drawCareerMap(ctx, w / 2, subY, z, isPortrait());
   } else if (app.mode === 'daily') {
     const mod = MODIFIERS[dailyModifier()];
     if (mod.name) {
       ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = '#ffab6b';
-      ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, h * 0.328);
+      ctx.fillText(`${mod.name} · очки ×${mod.mult}`, w / 2, subY);
     }
   }
-  // Сводка медалей (в карьере медали видны на карте)
-  if (app.mode !== 'career') {
+  // Сводка медалей: не в карьере всегда; в карьере — на портрете (там карта
+  // показывает только текущий класс и общий счёт медалей иначе не виден)
+  if (app.mode !== 'career' || isPortrait()) {
     const mc = medalCounts();
     if (mc[3] + mc[2] + mc[1] > 0) {
       ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, h * 0.355);
+      ctx.fillText(`🥇×${mc[3]}  🥈×${mc[2]}  🥉×${mc[1]}`, w / 2, isPortrait() ? h * 0.352 : h * 0.362);
     }
+  }
+  if (window.__layoutDebug) {
+    window.__layoutDebug.modeY = h * 0.308 - 22 * z;
+    window.__layoutDebug.subY = subY;
+    window.__layoutDebug.cardsTop = isPortrait() ? h * 0.36 : h * 0.38;
+    window.__layoutDebug.chloe = app.chloeZoneMenu;
   }
 
   // Карточки пород
   if (isPortrait()) {
-    const top = h * 0.325, cardH = h * 0.088, gap = h * 0.01, cardW = w * 0.88;
+    const top = h * 0.36, cardH = h * 0.082, gap = h * 0.008, cardW = w * 0.88;
     breedList.forEach((b, i) => {
       const cy = top + i * (cardH + gap), cx = w / 2;
       const sel = i === app.breedIdx;

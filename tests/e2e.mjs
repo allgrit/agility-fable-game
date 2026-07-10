@@ -3,11 +3,14 @@
 // на десктопном и мобильном вьюпортах. Использует хук window.__agility.
 import { chromium } from 'playwright';
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const SHOTS = join(ROOT, 'tests', 'shots');
+await mkdir(SHOTS, { recursive: true });
+const shot = (page, name) => page.screenshot({ path: join(SHOTS, name + '.png') });
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
 const server = http.createServer(async (req, res) => {
@@ -180,6 +183,19 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   check('меню: описания внутри карточек', layout.descInside, JSON.stringify(layout));
   check('меню: карточки не наезжают на «на старт!»', layout.aboveStart, JSON.stringify(layout));
 
+  // Шапка меню: промо Хлои над строкой режима, подстрока (карта/медали) над карточками
+  const header = await page.evaluate(`(async () => {
+    await new Promise(r => setTimeout(r, 200));
+    const L = window.__layoutDebug;
+    return {
+      chloeAboveMode: L.chloe ? (L.chloe.y + L.chloe.h) < L.modeY - 2 : false,
+      subAboveCards: L.subY < L.cardsTop - 4,
+    };
+  })()`);
+  check('шапка: промо Хлои не пересекает строку режима', header.chloeAboveMode, JSON.stringify(header));
+  check('шапка: карта/медали над карточками', header.subAboveCards, JSON.stringify(header));
+  await shot(page, 'desktop-menu');
+
   // Тап по запертому пуделю: выбирает его (не стартует чужим псом), второй тап — блок
   const poodle = await page.evaluate(`(async () => {
     const A = window.__agility;
@@ -310,10 +326,10 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   check('тач-прогон Novice чистый (реальные pointer-события)',
     touchRun.faults === 0 && touchRun.perfects === touchRun.total, JSON.stringify(touchRun));
 
-  // Layout портретного меню: карточки в экране и над строкой «на старт»
+  // Layout портретного меню: карточки в экране, над «на старт», под картой карьеры
   const pLayout = await page.evaluate(`(async () => {
     const A = window.__agility;
-    A.app.state = 'menu';
+    A.app.state = 'menu'; A.setMode('career');
     window.__layoutDebug = { cards: [] };
     await new Promise(r => setTimeout(r, 400));
     const c = document.getElementById('game');
@@ -322,10 +338,15 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
       n: L.cards.length,
       inCanvas: L.cards.every(k => k.x >= 0 && k.x + k.w <= c.width && k.y + k.h <= c.height),
       aboveStart: L.startTextY ? L.cards.every(k => k.y + k.h < L.startTextY) : true,
+      mapAboveCards: L.subY < L.cardsTop - 4,
+      chloeAboveMode: L.chloe ? (L.chloe.y + L.chloe.h) < L.modeY - 2 : false,
     };
   })()`);
   check('портретное меню: карточки в экране, над «на старт»',
     pLayout.n === 5 && pLayout.inCanvas && pLayout.aboveStart, JSON.stringify(pLayout));
+  check('портретная шапка: карта карьеры над карточками, промо над режимом',
+    pLayout.mapAboveCards && pLayout.chloeAboveMode, JSON.stringify(pLayout));
+  await shot(page, 'mobile-menu');
 
   // Экран результатов на таче: кнопки в панели, тап «Ещё раз» перезапускает
   const resBtns = await page.evaluate(`(async () => {
@@ -370,6 +391,26 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   })()`);
   check('результаты (тач): кнопки в экране, «Ещё раз» перезапускает',
     resBtns.inScreen && resBtns.afterTap === 'run', JSON.stringify(resBtns));
+  // Скрин экрана результатов для приёмки: доигрываем заново и открываем протокол
+  await page.evaluate(`(async () => {
+    const A = window.__agility;
+    const run = A.app.run;
+    const proto = Object.getPrototypeOf(run);
+    run.update = () => {};
+    let guard = 0;
+    while (guard++ < 40000 && run.phase !== 'finished') {
+      const m = run.activeMark;
+      if (m && m.qte && m.qte.state === 'active') {
+        const q = m.qte, t = run.time - m.qteStart, d = q.def;
+        if (d.kind === 'press' && t >= q.target - 0.01) run.input(d.key, true);
+      }
+      proto.update.call(run, 1 / 60);
+    }
+    run.finishT = 4;
+    delete run.update;
+    await new Promise(r => setTimeout(r, 700));
+  })()`);
+  await shot(page, 'mobile-results');
 
   check('консоль без ошибок (мобильный)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
