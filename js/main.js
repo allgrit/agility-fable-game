@@ -5,7 +5,7 @@ import { AudioEngine } from './audio.js';
 import { Particles } from './particles.js';
 import { Renderer } from './render.js';
 import { Run } from './game.js';
-import { QTE_DEFS } from './qte.js';
+import { QTE_DEFS, Qte, GROOVE_WINDOWS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
 import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
 import { pickTheme, THEMES } from './themes.js';
@@ -292,6 +292,16 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
     return;
   }
+  if (app.state === 'calib') {
+    if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'settings'; audio.click(); return; }
+    if (e.code === 'Space') calibInput();
+    return;
+  }
+  if (app.state === 'trainer') {
+    if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'settings'; audio.click(); return; }
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') trainerInput(e.code);
+    return;
+  }
   if (app.state === 'menu') return menuKey(e.code);
   if (app.state === 'results') return resultsKey(e.code);
   if (app.state === 'run') {
@@ -342,6 +352,26 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
+  if (app.state === 'calib') {
+    // Верхняя кромка — назад; остальное — тап калибровки
+    if (p.y < canvas.height * 0.12) { app.state = 'settings'; audio.click(); }
+    else calibInput();
+    return;
+  }
+  if (app.state === 'trainer') {
+    const sl = app.trainerSlider;
+    if (sl && p.x >= sl.x - 12 && p.x <= sl.x + sl.w + 12 && p.y >= sl.y && p.y <= sl.y + sl.h) {
+      const frac = Math.max(0, Math.min(1, (p.x - sl.sx) / sl.sw));
+      app.trainer.bpm = Math.round(80 + frac * 90);
+      settings.trainerBpm = app.trainer.bpm;
+      saveSettings();
+      app.trainer.restT = 0.01; // перезапуск захода с новым темпом
+      return;
+    }
+    if (p.y < canvas.height * 0.12) { app.state = 'settings'; audio.click(); return; }
+    trainerInput(p.x < canvas.width / 2 ? 'ArrowLeft' : 'ArrowRight');
+    return;
+  }
   if (app.state === 'shop') {
     if (!handleShopTap(p)) { app.state = 'menu'; audio.click(); }
     return;
@@ -959,11 +989,14 @@ function drawQuests() {
 
 // ---------- НАСТРОЙКИ (доступность) ----------
 function settingsRows(px, py, pw, z) {
+  const offMs = Math.round((settings.audioOffset || 0) * 1000);
   return [
     { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
     { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
     { id: 'music', name: 'Музыка', kind: 'slider', y: py + 205 * z },
     { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 260 * z },
+    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 320 * z },
+    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 368 * z },
   ];
 }
 
@@ -973,7 +1006,7 @@ function drawSettings() {
   ctx.save();
   ctx.fillStyle = 'rgba(6,12,10,0.85)';
   ctx.fillRect(0, 0, w, h);
-  const pw = Math.min(520 * z, w * 0.94), ph = Math.min(420 * z, h * 0.9);
+  const pw = Math.min(520 * z, w * 0.94), ph = Math.min(470 * z, h * 0.92);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   panel(ctx, px, py, pw, ph);
   ctx.textAlign = 'center';
@@ -986,7 +1019,13 @@ function drawSettings() {
     ctx.fillStyle = '#fff';
     ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText(r.name, px + 28 * z, r.y);
-    if (r.kind === 'toggle') {
+    if (r.kind === 'button') {
+      // Кнопка-строка целиком: рамка вокруг названия
+      const bw2 = pw - 48 * z;
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(px + 20 * z, r.y - 22 * z, bw2, 34 * z, 8 * z); ctx.stroke();
+      r.hit = { x: px + 20 * z, y: r.y - 22 * z, w: bw2, h: 34 * z };
+    } else if (r.kind === 'toggle') {
       const on = !!settings[r.id];
       const tx = px + pw - 84 * z, ty = r.y - 13 * z;
       ctx.fillStyle = on ? '#4caf6d' : 'rgba(255,255,255,0.2)';
@@ -1015,7 +1054,10 @@ function handleSettingsTap(p) {
   for (const r of app.settingsRows || []) {
     const hh = r.hit;
     if (hh && p.x >= hh.x && p.x <= hh.x + hh.w && p.y >= hh.y && p.y <= hh.y + hh.h) {
-      if (r.kind === 'toggle') settings[r.id] = !settings[r.id];
+      if (r.kind === 'button') {
+        if (r.id === 'calib') startCalib();
+        else if (r.id === 'trainer') startTrainer();
+      } else if (r.kind === 'toggle') settings[r.id] = !settings[r.id];
       else settings[r.id] = Math.max(0, Math.min(1, (p.x - hh.sx) / hh.sw));
       saveSettings();
       audio.click();
@@ -1023,6 +1065,172 @@ function handleSettingsTap(p) {
     }
   }
   return false;
+}
+
+// ---------- КАЛИБРОВКА АУДИО-ЗАДЕРЖКИ ----------
+// Метроном 100 BPM, игрок тапает в такт 8 раз; медиана смещений → settings.audioOffset.
+function startCalib() {
+  app.calib = { start: app.t, beat: 0.6, taps: [], nextTick: 0, done: false };
+  app.state = 'calib';
+}
+
+function calibInput() {
+  const c = app.calib;
+  if (!c || c.done) return;
+  const t = app.t - c.start;
+  if (t < c.beat * 1.5) return; // первые полтора такта — вслушаться
+  const nearest = Math.round(t / c.beat) * c.beat;
+  c.taps.push(t - nearest);
+  audio.click();
+  if (c.taps.length >= 8) {
+    const sorted = [...c.taps].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    // Клампим до вменяемых ±250мс — защита от случайных тапов
+    settings.audioOffset = Math.max(-0.25, Math.min(0.25, median));
+    saveSettings();
+    c.done = true;
+  }
+}
+
+function drawCalib() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const c = app.calib;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.92)';
+  ctx.fillRect(0, 0, w, h);
+  // Лукахед-шедулинг тиков метронома в точном WebAudio-времени
+  const t = app.t - c.start;
+  if (!c.done && c.nextTick - t < 0.12) {
+    audio.metroTick?.(Math.max(0, c.nextTick - t), Math.round(c.nextTick / c.beat) % 2);
+    c.nextTick += c.beat;
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(26 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🎧 Калибровка звука', w / 2, h * 0.22);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(IS_TOUCH ? 'Тапай по экрану точно в такт метроному — 8 раз'
+    : 'Жми ПРОБЕЛ точно в такт метроному — 8 раз', w / 2, h * 0.30);
+  // Пульс на бит
+  const phase = (t % c.beat) / c.beat;
+  const pr = (40 + (1 - phase) * 26) * z;
+  ctx.strokeStyle = phase < 0.15 ? '#ffd54a' : 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = phase < 0.15 ? 8 : 3;
+  ctx.beginPath(); ctx.arc(w / 2, h * 0.5, pr, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(c.done ? '✓' : `${c.taps.length}/8`, w / 2, h * 0.5 + 10 * z);
+  if (c.done) {
+    const ms = Math.round((settings.audioOffset || 0) * 1000);
+    ctx.fillStyle = '#69f0ae';
+    ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`Готово! Задержка: ${ms >= 0 ? '+' : ''}${ms} мс`, w / 2, h * 0.66);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ESC / тап по краю — назад', w / 2, h * 0.88);
+  ctx.restore();
+}
+
+// ---------- ТРЕНИРОВКА ЗМЕЙКИ ----------
+// Бесконечный groove с BPM-слайдером: оттачивай ритм без трассы и судьи.
+function startTrainer() {
+  const bpm = settings.trainerBpm || 110;
+  app.trainer = {
+    bpm, start: app.t, streak: 0, best: 0, total: 0, perfect: 0,
+    qte: newTrainerQte(bpm),
+    restT: 0,
+  };
+  app.state = 'trainer';
+}
+
+function newTrainerQte(bpm) {
+  return new Qte('weave', {
+    bpm, grooveWindows: GROOVE_WINDOWS.excellent,
+    audioOffset: settings.audioOffset || 0,
+  });
+}
+
+function trainerInput(key) {
+  const tr = app.trainer;
+  if (!tr || tr.restT > 0) return;
+  const evs = tr.qte.press(key, app.t - tr.start);
+  trainerEvents(evs);
+}
+
+function trainerEvents(evs) {
+  const tr = app.trainer;
+  for (const e of evs) {
+    if (e.type === 'beat') {
+      tr.total++;
+      if (e.grade === 'perfect') { tr.perfect++; tr.streak++; tr.best = Math.max(tr.best, tr.streak); audio.perfect(); }
+      else { tr.streak = 0; if (e.grade === 'miss') audio.miss(); else audio.good(); }
+    }
+  }
+  if (tr.qte.state === 'done') tr.restT = 1.0; // пауза и новый заход
+}
+
+function drawTrainer(dt) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const tr = app.trainer;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.92)';
+  ctx.fillRect(0, 0, w, h);
+  if (tr.restT > 0) {
+    tr.restT -= dt;
+    if (tr.restT <= 0) { tr.start = app.t; tr.qte = newTrainerQte(tr.bpm); }
+  } else {
+    const t = app.t - tr.start;
+    trainerEvents(tr.qte.update(t));
+    // Метроном-тики с лукахедом
+    const q = tr.qte;
+    if (q.state === 'active' && q.nextBeatT !== null && q.beatIdx < q.def.beats) {
+      const eta = q.nextBeatT - t;
+      if (eta <= 0.12 && q._schedTick !== q.beatIdx) {
+        q._schedTick = q.beatIdx;
+        audio.metroTick?.(Math.max(0, eta), q.beatIdx % 2);
+      }
+    }
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#b388ff';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🎵 Тренировка змейки', w / 2, h * 0.14);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(IS_TOUCH ? 'Тапай ЛЕВУЮ и ПРАВУЮ половины экрана в такт'
+    : 'Жми ← и → попеременно в такт метроному', w / 2, h * 0.21);
+  // Лента нот по центру
+  if (tr.restT <= 0) {
+    drawGrooveLane(ctx, { time: app.t }, { qte: tr.qte, qteStart: tr.start }, w / 2, h * 0.45, w, z);
+  } else {
+    ctx.fillStyle = '#69f0ae';
+    ctx.font = `900 ${Math.round(26 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('Заход пройден! Ещё раз…', w / 2, h * 0.45);
+  }
+  // Статистика
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`Perfect: ${tr.perfect}/${tr.total}   Серия: ${tr.streak}   Рекорд серии: ${tr.best}`, w / 2, h * 0.62);
+  // BPM-слайдер
+  const sw = Math.min(360 * z, w * 0.7), sx = w / 2 - sw / 2, sy = h * 0.74;
+  const frac = (tr.bpm - 80) / (170 - 80);
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(sx, sy, sw, 8 * z);
+  ctx.fillStyle = '#b388ff';
+  ctx.fillRect(sx, sy, sw * frac, 8 * z);
+  ctx.beginPath(); ctx.arc(sx + sw * frac, sy + 4 * z, 10 * z, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`${tr.bpm} BPM`, w / 2, sy - 12 * z);
+  app.trainerSlider = { x: sx, y: sy - 14 * z, w: sw, h: 34 * z, sx, sw };
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ESC / тап по верху — назад', w / 2, h * 0.9);
+  ctx.restore();
 }
 
 // ---------- ЭКРАН ЛИДЕРБОРДА ----------
@@ -2031,6 +2239,10 @@ function frame(now) {
     if (app.state === 'quests') drawQuests();
     if (app.state === 'settings') drawSettings();
     drawToasts(dt);
+  } else if (app.state === 'calib') {
+    drawCalib();
+  } else if (app.state === 'trainer') {
+    drawTrainer(dt);
   } else if (app.run) {
     renderer.begin(dt);
     app.run.update(dt);
