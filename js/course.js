@@ -43,6 +43,8 @@ export const CONTACT_TYPES = ['aframe', 'dogwalk', 'seesaw'];
 
 // Список типов снарядов для класса с учётом правил (слалом x1, шина <=1, стол <=1).
 function buildTypeList(rng, cls, variant) {
+  // Тест-драйв/спецтрассы: точный состав снарядов в заданном порядке
+  if (variant.forceTypes) return [...variant.forceTypes];
   const c = { ...CLASSES[cls], ...variant };
   const types = [];
   const contacts = CONTACT_TYPES.filter(t => c.seesaw || t !== 'seesaw');

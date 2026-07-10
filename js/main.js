@@ -35,6 +35,8 @@ const audio = new AudioEngine();
 const fx = new Particles();
 
 const STAGES = 5; // трасс в каждом классе карьеры
+// Тест-драйв V4: ?test=v4 — одна трасса со всеми новыми механиками, без прогрессии
+const TEST_DRIVE = new URLSearchParams(location.search).has('test');
 
 const app = {
   state: 'menu',           // menu | run | results | board
@@ -47,6 +49,7 @@ const app = {
   realIdx: 0,
   t: 0,
   bestPoints: Number(localStorage.getItem('agility_best') || 0),
+  testDrive: TEST_DRIVE,
 };
 
 function careerSeed(cls, stage) {
@@ -517,6 +520,8 @@ function resultsKey(code) {
   }
   if (code === 'KeyS') return shareResult();
   if (code === 'Enter' || code === 'Space') {
+    // Тест-драйв: без прогрессии — просто ещё заход
+    if (app.testDrive) return startRun();
     // Победа над боссом: сначала газетная вырезка, потом переход
     if (app.bossWin) {
       app.state = 'news';
@@ -577,7 +582,8 @@ function startRun() {
     return;
   }
   // Первый запуск: разминка во «Дворе» — 3 снаряда, провалить нельзя
-  if (!localStorage.getItem('agility_onboarded')) return startWarmup();
+  // (тест-драйв стартует сразу, без онбординга)
+  if (!app.testDrive && !localStorage.getItem('agility_onboarded')) return startWarmup();
   // Смена дня в живой сессии: пересоздать daily/weekly-задания
   {
     const d = new Date();
@@ -590,6 +596,13 @@ function startRun() {
   } else if (app.mode === 'daily') {
     course = generateCourse(todayNum() * 13 + 7, dailyCls());
     course.name = `Трасса дня ${todayStr()}`;
+  } else if (app.testDrive) {
+    // Тест-драйв V4 (?test=v4): все новые механики на одной трассе по порядку —
+    // шина double-tap, чарж, серпантин, groove-слалом, стол «Замри», тройной
+    course = generateCourse(4242, 'excellent', { forceTypes: [
+      'jump', 'tire', 'spread', 'serpentine', 'weave', 'table', 'triple', 'seesaw', 'tunnel', 'jump',
+    ] });
+    course.name = '🧪 Тест-драйв V4 · все механики';
   } else if (isBossStage()) {
     // Босс-этап: фиксированная дуэльная трасса класса, гонка с призраком
     const boss = bossFor(app.cls);
@@ -613,7 +626,11 @@ function startRun() {
     modifier: activeModifier(), windowMul: (mod.windowMul || 1) * ngMul,
     audioOffset: settings.audioOffset || 0 });
   app.bossWin = null;
-  if (isBossStage()) {
+  if (app.testDrive) {
+    // Для полноты картины — призрак-соперник и стартовая реплика
+    app.run.ghost = { name: 'Рекс', k: 1.05, time: app.run.sct * 1.05, look: 'border' };
+    app.run.startLine = 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
+  } else if (isBossStage()) {
     const boss = bossFor(app.cls);
     app.run.ghost = { name: boss.name, k: boss.k, time: app.run.sct * boss.k, look: boss.breedLook };
     app.run.startLine = pickLine('bossStart');
@@ -1895,7 +1912,9 @@ function drawMenu(dt) {
   ctx.font = `bold ${modeFs}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#ffd54a';
   let modeName;
-  if (app.mode === 'career') {
+  if (app.testDrive) {
+    modeName = '🧪 ТЕСТ-ДРАЙВ V4 · все новые механики';
+  } else if (app.mode === 'career') {
     const season = SEASONS[app.cls]?.name || '';
     modeName = isBossStage()
       ? `КАРЬЕРА · ${season} · 👻 БОСС: ${bossFor(app.cls).name}`
