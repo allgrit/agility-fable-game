@@ -1667,7 +1667,7 @@ function drawQte(run, m, z) {
     const secLeft = Math.ceil(def.freezeTime * (1 - q.progress));
     ctx.fillStyle = q.inPause ? 'rgba(255,255,255,0.45)' : '#ffd54a';
     ctx.font = `900 ${Math.round(58 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(q.inPause ? '…' : String(secLeft), cx, cy - 46 * z);
+    ctx.fillText(q.inPause ? '…' : String(secLeft), cx, cy - 84 * z);
     gaugeBar(ctx, cx, cy, 260 * z, q.progress, '#b388ff', 'ЗАМРИ! Не трогай кнопки', z);
   } else if (def.kind === 'freeze' && q.stage === 2) {
     const pulse = 1 + Math.sin(run.time * 26) * 0.12;

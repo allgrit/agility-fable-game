@@ -34,7 +34,8 @@ await page.waitForFunction(() => !!window.__agility);
 const RUNNER = `(async (opts) => {
   const A = window.__agility;
   localStorage.setItem('agility_onboarded', '1');
-  localStorage.setItem('agility_hints', JSON.stringify({ weave: 1, aframe: 1, dogwalk: 1, seesaw: 1, table: 1 }));
+  localStorage.setItem('agility_hints', JSON.stringify({ weave: 1, aframe: 1, dogwalk: 1,
+    seesaw: 1, table: 1, tire2: 1, spread: 1, triple: 1, serpentine: 1 }));
   A.setMode(opts.mode || 'career');
   if (opts.cls) A.app.cls = opts.cls;
   if (opts.stage) A.app.stage = opts.stage;
@@ -63,6 +64,10 @@ const RUNNER = `(async (opts) => {
       const d = q.def;
       const resolvedCount = run.marks.filter(x => x.resolved).length;
       const skipInput = missArmed && resolvedCount === missArmed - 1; // намеренный промах N-го снаряда
+      // Заявка риска (late-commit) на первом же press-снаряде
+      if (opts.riskFirst && !m.risk && d.kind === 'press' && t < q.target - q.w && run.focus?.count > 0) {
+        run.tryRisk();
+      }
       if (!skipInput) {
         if (d.kind === 'press') { if (t >= q.target - 0.01) run.input(d.key, true); }
         else if (d.kind === 'rhythm') {
@@ -183,6 +188,42 @@ const SCENES = [
     predicate: "q && q.state==='active' && q.def.kind==='press' && (() => { const v=Math.max(run.dog.speed,.5); const dd=m.entryD-1.3-run.dog.dist; return Math.abs(dd)<=q.w*0.6*v; })()",
     criteria: 'Бордер-колли в окрасе лайлак: серо-бежевое (пыльно-розоватое) тело вместо чёрного, белая грудь.',
   },
+  // ---- V4 «Глубина» ----
+  {
+    name: '16-groove-lane', mode: 'career', cls: 'open', stage: 1,
+    predicate: "m && m.o.type==='weave' && q && q.state==='active' && q.beatIdx >= 3 && q.beatIdx <= 6",
+    criteria: 'Weave Groove: внизу ЛЕНТА НОТ с жёлтой линией удара слева, ноты-стрелки ← (синие) и → (жёлтые) едут справа, подпись BPM слева над лентой и «стойка N/12» справа; собака в слаломе.',
+  },
+  {
+    name: '17-table-count', mode: 'career', cls: 'excellent', stage: 1,
+    predicate: "m && m.o.type==='table' && q && q.def.kind==='freeze' && q.stage === 1 && q.progress > 0.25 && q.progress < 0.75",
+    criteria: 'Стол «Замри»: собака НА столе, большая жёлтая цифра счёта (или «…» в фейк-паузу), фиолетовая шкала с подписью «ЗАМРИ! Не трогай кнопки», пузырь судейского счёта у хендлера.',
+  },
+  {
+    name: '18-charge-arc', mode: 'career', cls: 'excellent', stage: 5,
+    predicate: "m && m.o.type==='spread' && q && q.holding && q.progress > 0.25 && q.progress < 0.55",
+    criteria: 'Чарж-барьер: ДУГА заряда 270° с жёлтым сектором зоны (60–85%), голубой прогресс ещё до зоны, подпись «Отпусти … в жёлтом!», собака приседает перед двойным барьером (каскад планок).',
+  },
+  {
+    name: '19-serpentine', mode: 'career', cls: 'excellent', stage: 2,
+    predicate: "m && m.o.type==='serpentine' && q && q.state==='active' && q.beatIdx >= 1 && q.beatIdx <= 2",
+    criteria: 'Серпантин: веер из 4 наклонных барьеров (сине-оранжевые стойки), внизу 4 кейкапа — пройденные зелёные, текущий со стрелкой стороны, дальние могут быть «?» (не раскрыты).',
+  },
+  {
+    name: '20-tire-apex', mode: 'career', cls: 'excellent', stage: 4,
+    predicate: "m && m.o.type==='tire' && q && q.stage === 1",
+    criteria: 'Шина double-tap: собака В ВОЗДУХЕ у шины (красное кольцо), внизу кейкап ХОП с голубым/жёлтым кольцом, сжимающимся к апексу; попап «ЕЩЁ!» голубой.',
+  },
+  {
+    name: '21-boss-ghost', mode: 'career', cls: 'novice', stage: 6,
+    predicate: "run.ghost && run.time > 2.5 && !run.dog.hidden",
+    criteria: 'Босс-дуэль: на трассе ДВЕ собаки — наша и полупрозрачный ПРИЗРАК с подписью «👻 Рекс» фиолетовым; заголовок HUD «👻 Босс: Рекс · Двор».',
+  },
+  {
+    name: '22-risk-armed', mode: 'career', cls: 'novice', stage: 1, riskFirst: true,
+    predicate: "m && m.risk && q && q.state==='active' && run.time > 1.5",
+    criteria: 'Заявка риска: попап «⚡ РИСК ×2!» оранжевый над собакой, в правой HUD-панели строка «Риск ⚡⚡·» (один фокус потрачен).',
+  },
 ];
 
 const manifest = [];
@@ -190,6 +231,7 @@ for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
     mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
+    riskFirst: sc.riskFirst,
   })})`);
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)
@@ -205,6 +247,49 @@ for (const sc of SCENES) {
   await page.screenshot({ path: join(OUT, sc.name + '.png') });
   manifest.push({ file: sc.name + '.png', hit: res.hit, criteria: sc.criteria });
   console.log(`${res.hit ? 'ok ' : 'MISS'} ${sc.name}`);
+}
+
+// ---- Экранные сцены V4 (прямая установка состояния, вне RUNNER) ----
+const SCREENS = [
+  {
+    name: '23-newspaper',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.bossWin = { boss: { id: 'rex', name: 'Рекс' }, time: 32.4, ghostTime: 34.1,
+        breedName: 'Хлоя', cls: 'novice' };
+      A.app.state = 'news';
+    })()`,
+    criteria: 'Газета «АДЖИЛИТИ ВЕСТНИК» на бумажном листе с наклоном: заголовок «СЕНСАЦИЯ ВО ДВОРЕ!», подзаголовок с Хлоей и дельтой, рамка-«фото» 🐕🏆, абзац текста, снизу «ENTER / тап — дальше».',
+  },
+  {
+    name: '24-champion',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.state = 'champion';
+    })()`,
+    criteria: 'Экран чемпиона: кубок 🏆 в лучах, «ЧЕМПИОН!» золотом, строка про победу над Астрой, реплика хендлера, фиолетовая строка про NG+.',
+  },
+  {
+    name: '25-menu-boss',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.setMode('career');
+      A.app.cls = 'novice';
+      A.app.stage = 6;
+      A.app.state = 'menu';
+    })()`,
+    criteria: 'Меню на босс-этапе: заголовок «КАРЬЕРА · Двор · 👻 БОСС: Рекс», на карте карьеры после 5 кружков пульсирует 👻; строка дара выбранной породы над «ENTER — на старт».',
+  },
+];
+for (const sc of SCREENS) {
+  await page.evaluate(sc.setup);
+  await new Promise(r => setTimeout(r, 700));
+  await page.screenshot({ path: join(OUT, sc.name + '.png') });
+  manifest.push({ file: sc.name + '.png', hit: true, criteria: sc.criteria });
+  console.log(`ok  ${sc.name}`);
 }
 
 await writeFile(join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
