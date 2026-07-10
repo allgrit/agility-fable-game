@@ -627,8 +627,8 @@ function startRun() {
     audioOffset: settings.audioOffset || 0 });
   app.bossWin = null;
   if (app.testDrive) {
-    // Для полноты картины — призрак-соперник и стартовая реплика
-    app.run.ghost = { name: 'Рекс', k: 1.05, time: app.run.sct * 1.05, look: 'border' };
+    // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
+    app.run.ghost = { name: 'Эйва', k: 1.05, time: app.run.sct * 1.05, look: 'aussie' };
     app.run.startLine = 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
   } else if (isBossStage()) {
     const boss = bossFor(app.cls);
@@ -1655,14 +1655,22 @@ const APPROACH_HINTS = {
 function drawApproachHint(ctx, type, cx, cy, z) {
   const fn = APPROACH_HINTS[type];
   if (!fn) return;
+  const txt = fn();
   ctx.save();
   ctx.textAlign = 'center';
-  ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-  ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-  const txt = fn();
-  ctx.strokeText(txt, cx, cy - 66 * z);
-  ctx.fillStyle = '#cfe8ff';
-  ctx.fillText(txt, cx, cy - 66 * z);
+  // Крупно и на плашке — читается за долю секунды подлёта
+  const fs = Math.round(21 * z);
+  ctx.font = `900 ${fs}px "Segoe UI", sans-serif`;
+  const tw = ctx.measureText(txt).width;
+  const hy = cy - 78 * z;
+  ctx.fillStyle = 'rgba(10,18,14,0.88)';
+  ctx.strokeStyle = 'rgba(255,213,74,0.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(cx - tw / 2 - 16 * z, hy - fs * 0.85, tw + 32 * z, fs * 1.7, 10 * z);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffe9a8';
+  ctx.fillText(txt, cx, hy + fs * 0.32);
   ctx.restore();
 }
 

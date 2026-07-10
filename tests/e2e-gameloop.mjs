@@ -232,7 +232,7 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
 {
   const r = await page.evaluate(`(async () => {
     const A = window.__agility;
-    // V4: финальная трасса Novice → босс Рекс (этап 6), победа над ним → класс Open
+    // V4: финальная трасса Novice → босс Эйва (этап 6), победа над ней → класс Open
     A.app.cls = 'novice'; A.app.stage = 5; A.setMode('career');
     const res = await ${PLAY}({});
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
@@ -240,7 +240,7 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
     const bossStage = A.app.stage === 6;
     const hasGhost = !!A.app.run?.ghost;
     const ghostName = A.app.run?.ghost?.name;
-    // Дуэль с Рексом: чистый прогон автопилота быстрее SCT×1.18
+    // Дуэль с Эйвой: чистый прогон автопилота быстрее SCT×1.18
     await ${PLAY}({});
     const bossWon = !!A.app.bossWin;
     // Победа применяется сразу: класс уже Open; ENTER откроет газету
@@ -254,8 +254,8 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
     return { qualified: res.result?.qualified, bossStage, hasGhost, ghostName,
       bossWon, newsShown, afterCls, types };
   })()`);
-  check('квалификация ведёт к боссу Рексу (этап 6, призрак на трассе)',
-    r.qualified && r.bossStage && r.hasGhost && r.ghostName === 'Рекс', JSON.stringify(r));
+  check('квалификация ведёт к боссу Эйве (этап 6, призрак на трассе)',
+    r.qualified && r.bossStage && r.hasGhost && r.ghostName === 'Эйва', JSON.stringify(r));
   check('победа над боссом: газета и переход в Open с новыми механиками',
     r.bossWon && r.newsShown && r.afterCls === 'open' && r.types.includes('weave'), JSON.stringify(r));
 }

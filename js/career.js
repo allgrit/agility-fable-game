@@ -15,9 +15,9 @@ export const SEASONS = {
 // поэтому поздние боссы требуют темп быстрее судейского (баланс-аудит V4:
 // при k>=1.05 запас у среднего игрока был 35–100% — напряжения не было).
 export const BOSSES = {
-  novice:    { id: 'rex',     name: 'Рекс',    k: 1.18, breedLook: 'border',
-    intro: 'Дворовый чемпион Рекс не проигрывал здесь никому.',
-    taunt: 'Рекс зевает на стартовой линии…' },
+  novice:    { id: 'ayva',    name: 'Эйва',    k: 1.18, breedLook: 'aussie',
+    intro: 'Дворовая чемпионка Эйва — мраморная аусси — не проигрывала здесь никому.',
+    taunt: 'Эйва зевает на стартовой линии…' },
   open:      { id: 'molniya', name: 'Молния',  k: 0.95, breedLook: 'jack',
     intro: 'Молния — гордость клуба. Её время бьют годами.',
     taunt: 'Молния уже размялась.' },
@@ -123,10 +123,10 @@ export function startLineFor(mode, cls) {
 export function newspaperFor(boss, breedName, timeSec, ghostSec) {
   const delta = Math.max(0.01, ghostSec - timeSec).toFixed(2);
   const headlines = {
-    rex: {
+    ayva: {
       title: 'СЕНСАЦИЯ ВО ДВОРЕ!',
-      sub: `${breedName} обходит непобедимого Рекса на ${delta}с`,
-      body: 'Местные жители не верят своим глазам: дворовый трон, который Рекс занимал три года, пал за один вечер.',
+      sub: `${breedName} обходит непобедимую Эйву на ${delta}с`,
+      body: 'Местные жители не верят своим глазам: дворовый трон, который мраморная Эйва занимала три года, пал за один вечер.',
     },
     molniya: {
       title: 'МОЛНИЮ ОБОГНАЛИ',

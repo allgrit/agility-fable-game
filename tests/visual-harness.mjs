@@ -217,7 +217,7 @@ const SCENES = [
   {
     name: '21-boss-ghost', mode: 'career', cls: 'novice', stage: 6,
     predicate: "run.ghost && run.time > 2.5 && !run.dog.hidden",
-    criteria: 'Босс-дуэль: на трассе ДВЕ собаки — наша и полупрозрачный ПРИЗРАК с подписью «👻 Рекс» фиолетовым; заголовок HUD «👻 Босс: Рекс · Двор».',
+    criteria: 'Босс-дуэль: на трассе ДВЕ собаки — наша и полупрозрачная МРАМОРНАЯ АУССИ-призрак с подписью «👻 Эйва» фиолетовым; заголовок HUD «👻 Босс: Эйва · Двор».',
   },
   {
     name: '22-risk-armed', mode: 'career', cls: 'novice', stage: 1, riskFirst: true,
@@ -256,7 +256,7 @@ const SCREENS = [
     setup: `(() => {
       const A = window.__agility;
       A.app.run = null;
-      A.app.bossWin = { boss: { id: 'rex', name: 'Рекс' }, time: 32.4, ghostTime: 34.1,
+      A.app.bossWin = { boss: { id: 'ayva', name: 'Эйва' }, time: 32.4, ghostTime: 34.1,
         breedName: 'Хлоя', cls: 'novice' };
       A.app.state = 'news';
     })()`,
@@ -281,7 +281,7 @@ const SCREENS = [
       A.app.stage = 6;
       A.app.state = 'menu';
     })()`,
-    criteria: 'Меню на босс-этапе: заголовок «КАРЬЕРА · Двор · 👻 БОСС: Рекс», на карте карьеры после 5 кружков пульсирует 👻; строка дара выбранной породы над «ENTER — на старт».',
+    criteria: 'Меню на босс-этапе: заголовок «КАРЬЕРА · Двор · 👻 БОСС: Эйва», на карте карьеры после 5 кружков пульсирует 👻; строка дара выбранной породы над «ENTER — на старт».',
   },
 ];
 for (const sc of SCREENS) {
