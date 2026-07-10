@@ -232,18 +232,32 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
 {
   const r = await page.evaluate(`(async () => {
     const A = window.__agility;
-    // Финальная трасса Novice: qualified → класс Open
+    // V4: финальная трасса Novice → босс Рекс (этап 6), победа над ним → класс Open
     A.app.cls = 'novice'; A.app.stage = 5; A.setMode('career');
     const res = await ${PLAY}({});
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
     await new Promise(r => setTimeout(r, 400));
+    const bossStage = A.app.stage === 6;
+    const hasGhost = !!A.app.run?.ghost;
+    const ghostName = A.app.run?.ghost?.name;
+    // Дуэль с Рексом: чистый прогон автопилота быстрее SCT×1.18
+    await ${PLAY}({});
+    const bossWon = !!A.app.bossWin;
+    // Победа применяется сразу: класс уже Open; ENTER откроет газету
     const afterCls = localStorage.getItem('agility_class');
-    // Open-трасса обязана содержать слалом (механики открылись)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); // → газета
+    await new Promise(r => setTimeout(r, 300));
+    const newsShown = A.app.state === 'news';
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); // → старт Open
+    await new Promise(r => setTimeout(r, 400));
     const types = A.app.run ? [...new Set(A.app.run.course.obstacles.map(o => o.type))] : [];
-    return { qualified: res.result?.qualified, afterCls, types };
+    return { qualified: res.result?.qualified, bossStage, hasGhost, ghostName,
+      bossWon, newsShown, afterCls, types };
   })()`);
-  check('квалификация двигает в класс Open с новыми механиками',
-    r.qualified && r.afterCls === 'open' && r.types.includes('weave'), JSON.stringify(r));
+  check('квалификация ведёт к боссу Рексу (этап 6, призрак на трассе)',
+    r.qualified && r.bossStage && r.hasGhost && r.ghostName === 'Рекс', JSON.stringify(r));
+  check('победа над боссом: газета и переход в Open с новыми механиками',
+    r.bossWon && r.newsShown && r.afterCls === 'open' && r.types.includes('weave'), JSON.stringify(r));
 }
 
 // ============================================================

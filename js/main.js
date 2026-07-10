@@ -13,6 +13,7 @@ import { loadMeta, saveMeta, earnFromRun, earnXp, rosettesForLevels, dogState,
   titleFor, xpToNext, streakMult, grantRosette } from './meta.js';
 import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip } from './cosmetics.js';
 import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
+import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -293,6 +294,14 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
     return;
   }
+  if (app.state === 'news') {
+    if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') newsContinue();
+    return;
+  }
+  if (app.state === 'champion') {
+    if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') { toMenu(); audio.click(); }
+    return;
+  }
   if (app.state === 'calib') {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'settings'; audio.click(); return; }
     if (e.code === 'Space') calibInput();
@@ -360,6 +369,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
+  if (app.state === 'news') { newsContinue(); return; }
+  if (app.state === 'champion') { toMenu(); audio.click(); return; }
   if (app.state === 'calib') {
     // Верхняя кромка — назад; остальное — тап калибровки
     if (p.y < canvas.height * 0.12) { app.state = 'settings'; audio.click(); }
@@ -501,12 +512,24 @@ function resultsKey(code) {
   }
   if (code === 'KeyS') return shareResult();
   if (code === 'Enter' || code === 'Space') {
+    // Победа над боссом: сначала газетная вырезка, потом переход
+    if (app.bossWin) {
+      app.state = 'news';
+      audio.click();
+      return;
+    }
     if (app.mode === 'career') {
-      if (app.result && app.result.qualified) {
+      if (isBossStage()) {
+        // Босс не побеждён — та же дуэль ещё раз (победа обработана в результатах)
+      } else if (app.result && app.result.qualified) {
         app.stage++;
         if (app.stage > STAGES) {
-          if (app.cls !== 'masters') { app.cls = nextClass(app.cls); app.stage = 1; }
-          else app.stage = STAGES; // карьера пройдена — фармим медали Masters
+          if (meta.bosses[app.cls] || !bossFor(app.cls)) {
+            // Босс уже бит (или его нет) — легаси-переход класса
+            if (app.cls !== 'masters') { app.cls = nextClass(app.cls); app.stage = 1; }
+            else app.stage = STAGES;
+          }
+          // иначе stage = 6 — впереди дуэль с боссом
         }
         saveProgress();
       }
@@ -518,6 +541,25 @@ function resultsKey(code) {
   }
   if (code === 'KeyR') startRun();
   if (code === 'Escape') toMenu();
+}
+
+// Босс-этап: 6-я трасса класса — дуэль с призраком (если босс ещё не побеждён)
+function isBossStage() {
+  return app.mode === 'career' && app.stage > STAGES && !!bossFor(app.cls);
+}
+
+// После победы над боссом: класс закрыт, переход дальше (или гранд-финал → чемпион)
+function applyBossVictory() {
+  meta.bosses[app.cls] = 1;
+  saveMeta(meta);
+  if (app.cls === 'masters') {
+    meta.ngplusUnlocked = 1;
+    saveMeta(meta);
+  } else {
+    app.cls = nextClass(app.cls);
+    app.stage = 1;
+    saveProgress();
+  }
 }
 
 function toMenu() { app.state = 'menu'; app.run = null; audio.crowdLevel(0); }
@@ -544,6 +586,11 @@ function startRun() {
   } else if (app.mode === 'daily') {
     course = generateCourse(todayNum() * 13 + 7, dailyCls());
     course.name = `Трасса дня ${todayStr()}`;
+  } else if (isBossStage()) {
+    // Босс-этап: фиксированная дуэльная трасса класса, гонка с призраком
+    const boss = bossFor(app.cls);
+    course = generateCourse(careerSeed(app.cls, 1) * 31 + 17, app.cls);
+    course.name = `👻 Босс: ${boss.name} · ${SEASONS[app.cls].name}`;
   } else {
     // Прогрессия внутри Novice: 1-2 — только прыжки, 3-4 — + слалом, 5 — + горка (превью Open).
     const variant = app.cls === 'novice'
@@ -556,9 +603,20 @@ function startRun() {
   renderer.theme = pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
   const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
   if (dressed.ringTheme) renderer.theme = dressed.ringTheme;
+  // NG+ после гранд-финала: окна реакции ×0.85 — второй круг для ветеранов
+  const ngMul = meta.ngplusUnlocked && settings.ngplus ? 0.85 : 1;
   app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
-    modifier: activeModifier(), windowMul: mod.windowMul || 1,
+    modifier: activeModifier(), windowMul: (mod.windowMul || 1) * ngMul,
     audioOffset: settings.audioOffset || 0 });
+  app.bossWin = null;
+  if (isBossStage()) {
+    const boss = bossFor(app.cls);
+    app.run.ghost = { name: boss.name, k: boss.k, time: app.run.sct * boss.k, look: boss.breedLook };
+    app.run.startLine = pickLine('bossStart');
+    toasts.push({ icon: '👻', name: boss.name, desc: boss.taunt, t: 0 });
+  } else {
+    app.run.startLine = startLineFor(app.mode, app.cls);
+  }
   renderer.cam.x = course.start.x;
   renderer.cam.y = course.start.y;
   app.state = 'run';
@@ -601,8 +659,8 @@ function startWarmup() {
 
 // ---------- HUD ----------
 function drawHud(run) {
-  const ctx = renderer.ctx, w = canvas.width;
-  const z = Math.min(w, canvas.height) / 700;
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
 
   // Разминка: чистый экран без панелей — только суть. Финал — приглашение на старт.
   if (run.warmup) {
@@ -726,6 +784,21 @@ function drawHud(run) {
   const m = run.activeMark;
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running') drawQte(run, m, z);
 
+  // Реплика хендлера: на ритуале старта и сразу после финиша
+  const line = run.phase === 'countdown' ? run.startLine
+    : (run.phase === 'finished' && run.finishT < 2.6 ? run.finishLine : null);
+  if (line) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = `italic bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    const ly = h * (IS_TOUCH ? 0.3 : 0.76);
+    ctx.strokeText(`«${line}»`, w / 2, ly);
+    ctx.fillStyle = '#ffe9c4';
+    ctx.fillText(`«${line}»`, w / 2, ly);
+    ctx.restore();
+  }
+
   if (IS_TOUCH) drawTouchControls(run);
 }
 
@@ -822,6 +895,23 @@ function drawCareerMap(ctx, cx, y, z, portrait) {
         ctx.fillText(locked ? '🔒' : '○', sx, ry);
         ctx.fillStyle = locked ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.85)';
       }
+    }
+    // Босс класса: 👑 побеждён / 👻 текущая дуэль / силуэт впереди
+    if (bossFor(cls)) {
+      const bx = rx + (86 + STAGES * 26) * z;
+      const beaten = !!meta.bosses[cls];
+      const isCurBoss = ci === curClsIdx && app.stage > STAGES;
+      if (isCurBoss) {
+        const pulse = 1 + Math.sin(app.t * 5) * 0.15;
+        ctx.font = `bold ${Math.round((portrait ? 13 : 15) * z * pulse)}px "Segoe UI", sans-serif`;
+        ctx.fillStyle = '#b388ff';
+        ctx.fillText('👻', bx, ry);
+        ctx.font = `${Math.round(portrait ? 12 * z : 14 * z)}px "Segoe UI", sans-serif`;
+      } else {
+        ctx.fillStyle = beaten ? '#ffd54a' : 'rgba(255,255,255,0.35)';
+        ctx.fillText(beaten ? '👑' : (locked ? '' : '👻'), bx, ry);
+      }
+      ctx.fillStyle = locked ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.85)';
     }
   });
   ctx.restore();
@@ -1005,7 +1095,7 @@ function drawQuests() {
 // ---------- НАСТРОЙКИ (доступность) ----------
 function settingsRows(px, py, pw, z) {
   const offMs = Math.round((settings.audioOffset || 0) * 1000);
-  return [
+  const rows = [
     { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
     { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
     { id: 'music', name: 'Музыка', kind: 'slider', y: py + 205 * z },
@@ -1013,6 +1103,10 @@ function settingsRows(px, py, pw, z) {
     { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 320 * z },
     { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 368 * z },
   ];
+  if (meta.ngplusUnlocked) {
+    rows.push({ id: 'ngplus', name: '👑 NG+ · окна реакции ×0.85', kind: 'toggle', y: py + 416 * z });
+  }
+  return rows;
 }
 
 function drawSettings() {
@@ -1021,7 +1115,8 @@ function drawSettings() {
   ctx.save();
   ctx.fillStyle = 'rgba(6,12,10,0.85)';
   ctx.fillRect(0, 0, w, h);
-  const pw = Math.min(520 * z, w * 0.94), ph = Math.min(470 * z, h * 0.92);
+  const pw = Math.min(520 * z, w * 0.94);
+  const ph = Math.min((meta.ngplusUnlocked ? 510 : 470) * z, h * 0.92);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   panel(ctx, px, py, pw, ph);
   ctx.textAlign = 'center';
@@ -1080,6 +1175,105 @@ function handleSettingsTap(p) {
     }
   }
   return false;
+}
+
+// ---------- ГАЗЕТНАЯ ВЫРЕЗКА (победа над боссом) ----------
+function drawNews() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const bw = app.bossWin;
+  if (!bw) { app.state = 'menu'; return; }
+  const paper = newspaperFor(bw.boss, bw.breedName, bw.time, bw.ghostTime);
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,10,8,0.94)';
+  ctx.fillRect(0, 0, w, h);
+  // Лист газеты с лёгким наклоном
+  const pw = Math.min(520 * z, w * 0.92), ph = Math.min(480 * z, h * 0.88);
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate(-0.02);
+  ctx.fillStyle = '#efe8d8';
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 2;
+  ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+  ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#2b2b30';
+  ctx.font = `900 ${Math.round(17 * z)}px Georgia, serif`;
+  ctx.fillText('— АДЖИЛИТИ ВЕСТНИК —', 0, -ph / 2 + 34 * z);
+  ctx.strokeStyle = '#2b2b30'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(-pw / 2 + 20 * z, -ph / 2 + 46 * z); ctx.lineTo(pw / 2 - 20 * z, -ph / 2 + 46 * z); ctx.stroke();
+  ctx.font = `900 ${Math.round(30 * z)}px Georgia, serif`;
+  wrapText(ctx, paper.title, 0, -ph / 2 + 92 * z, pw - 50 * z, 34 * z, 2);
+  ctx.font = `bold italic ${Math.round(16 * z)}px Georgia, serif`;
+  ctx.fillStyle = '#4a4a52';
+  wrapText(ctx, paper.sub, 0, -ph / 2 + 150 * z, pw - 60 * z, 21 * z, 2);
+  // «Фото»: рамка с силуэтом собаки-победителя
+  const fy = -ph / 2 + 205 * z, fh = 120 * z;
+  ctx.fillStyle = '#d9d2c0';
+  ctx.fillRect(-pw / 2 + 40 * z, fy, pw - 80 * z, fh);
+  ctx.strokeStyle = '#8a8578'; ctx.strokeRect(-pw / 2 + 40 * z, fy, pw - 80 * z, fh);
+  ctx.font = `${Math.round(52 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🐕🏆', 0, fy + fh / 2 + 18 * z);
+  ctx.fillStyle = '#2b2b30';
+  ctx.font = `${Math.round(14 * z)}px Georgia, serif`;
+  wrapText(ctx, paper.body, 0, fy + fh + 30 * z, pw - 70 * z, 19 * z, 4);
+  ctx.restore();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+  ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ENTER / тап — дальше', w / 2, h - 30 * z);
+  ctx.restore();
+}
+
+// Продолжение после газеты: гранд-финал ведёт на экран чемпиона
+function newsContinue() {
+  const wasFinal = app.bossWin && app.bossWin.cls === 'masters';
+  app.bossWin = null;
+  audio.click();
+  if (wasFinal) { app.state = 'champion'; return; }
+  startRun(); // класс уже переключён в applyBossVictory
+}
+
+// ---------- ЭКРАН ЧЕМПИОНА (гранд-финал пройден) ----------
+function drawChampion() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,10,8,0.96)';
+  ctx.fillRect(0, 0, w, h);
+  // Лучи славы
+  ctx.translate(w / 2, h * 0.42);
+  for (let i = 0; i < 12; i++) {
+    ctx.save();
+    ctx.rotate((i / 12) * Math.PI * 2 + app.t * 0.15);
+    ctx.fillStyle = 'rgba(255,213,74,0.06)';
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(-30 * z, -h); ctx.lineTo(30 * z, -h); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.textAlign = 'center';
+  ctx.font = `${Math.round(110 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🏆', 0, 20 * z);
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(40 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ЧЕМПИОН!', 0, 90 * z);
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`${breedList[app.breedIdx].name} побеждает Астру в гранд-финале`, 0, 128 * z);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = `italic ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`«${pickLine('champion') || 'Дай лапу.'}»`, 0, 160 * z);
+  ctx.fillStyle = '#b388ff';
+  ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('Открыт NG+ — окна реакции ×0.85 (включается в настройках)', 0, 205 * z);
+  ctx.restore();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+  ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ENTER / тап — в меню', w / 2, h - 30 * z);
+  ctx.restore();
 }
 
 // ---------- КАЛИБРОВКА АУДИО-ЗАДЕРЖКИ ----------
@@ -1695,7 +1889,10 @@ function drawMenu(dt) {
   ctx.fillStyle = '#ffd54a';
   let modeName;
   if (app.mode === 'career') {
-    modeName = `КАРЬЕРА · ${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
+    const season = SEASONS[app.cls]?.name || '';
+    modeName = isBossStage()
+      ? `КАРЬЕРА · ${season} · 👻 БОСС: ${bossFor(app.cls).name}`
+      : `КАРЬЕРА · ${season} · ${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   } else if (app.mode === 'worldcup') {
     modeName = isPortrait() ? `ЧЕМПИОНАТ МИРА (${REAL_COURSES.length})`
       : `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
@@ -1995,6 +2192,21 @@ function drawResults(run, z) {
     }
     app.newMedal = recordMedal(app.result.stars);
     if (app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
+    // Босс-дуэль: победа = квалификация + время быстрее призрака
+    if (run.ghost) {
+      const won = app.result.qualified && run.time < run.ghost.time;
+      if (won) {
+        app.bossWin = { boss: bossFor(app.cls), time: run.time, ghostTime: run.ghost.time,
+          breedName: run.breed.name, cls: app.cls };
+        applyBossVictory();
+        run.finishLine = pickLine('bossWin');
+        audio.fanfare();
+      } else {
+        run.finishLine = pickLine('bossLose');
+      }
+    } else {
+      run.finishLine = pickLine(app.result.clean ? 'finishClean' : 'finishFail');
+    }
     // Достижения
     const newly = checkAchievements({
       run, result: app.result, mode: app.mode, cls: app.cls, goldCount: medalCounts()[3],
@@ -2030,6 +2242,12 @@ function drawResults(run, z) {
         isDaily: app.mode === 'daily', todayStr: todayStr(),
         runOfDay: meta.counters.runsToday.n,
       });
+      // Per-dog медали: золото копится на собаку (для будущих титульных ачивок)
+      if (res0.stars >= 3) {
+        meta.counters.goldByBreed = meta.counters.goldByBreed || {};
+        meta.counters.goldByBreed[breedList[app.breedIdx].id] =
+          (meta.counters.goldByBreed[breedList[app.breedIdx].id] || 0) + 1;
+      }
       // Пудель: дар «шоу» — ×1.5 косточек за прогон
       if (run.breed.ability === 'show' && earned.bones > 0) {
         const extra = Math.round(earned.bones * 0.5);
@@ -2130,6 +2348,19 @@ function drawResults(run, z) {
     ctx.fillText(fn(), w / 2, py + (185 + i * 38) * z);
     ctx.globalAlpha = 1;
   });
+
+  // Босс-дуэль: вердикт против призрака
+  if (run.ghost && ft > 3.1) {
+    const dTime = run.ghost.time - run.time;
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = dTime > 0 && res.qualified ? '#b388ff' : '#ff8a8a';
+    const msg = dTime > 0 && res.qualified
+      ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — ты быстрее на ${dTime.toFixed(2)}с!`
+      : res.qualified
+        ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — не хватило ${(-dTime).toFixed(2)}с`
+        : `👻 Против ${run.ghost.name} нужна квалификация (≤5 фолтов)`;
+    ctx.fillText(msg, w / 2, py + 320 * z);
+  }
 
   // 3.0с: медаль с bounce
   if (res.stars > 0 && ft >= 3.0) {
@@ -2273,6 +2504,12 @@ function frame(now) {
     drawCalib();
   } else if (app.state === 'trainer') {
     drawTrainer(dt);
+  } else if (app.state === 'news') {
+    drawNews();
+    drawToasts(dt);
+  } else if (app.state === 'champion') {
+    drawChampion();
+    drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);
     app.run.update(dt);

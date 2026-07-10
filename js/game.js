@@ -1,7 +1,7 @@
 // Оркестратор забега: собака на сплайне, QTE у снарядов, судейство, камера, эффекты.
 import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
-import { computeSct } from './scoring.js';
+import { computeSct, BREEDS } from './scoring.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
@@ -303,6 +303,14 @@ export class Run {
     if (m && m.resolved && d.dist > m.exitD + 0.5) {
       m.state.active = false;
       this.activeIdx = -1;
+    }
+
+    // Босс-призрак финишировал раньше нас — толпа ахает
+    if (this.ghost && !this._ghostFinished && this.time >= this.ghost.time) {
+      this._ghostFinished = true;
+      this.audio.gasp();
+      this.popups.push({ text: `${this.ghost.name} на финише!`, color: '#b388ff',
+        x: d.x, y: d.y - 3.2, t: 0 });
     }
 
     // Финиш
@@ -684,6 +692,29 @@ export class Run {
       if (!this.dog.hidden) r.drawDog(this.dog, this.breed);
       else { ctx.globalAlpha = 0.25; r.drawDog(this.dog, this.breed); ctx.globalAlpha = 1; }
     };
+    // Босс-призрак: бежит по трассе с постоянным темпом (время босса = SCT × k).
+    // Полупрозрачный силуэт с именем — соперник, которого надо обогнать.
+    if (this.ghost && this.phase !== 'countdown') {
+      const gd = Math.min(this.path.length - 0.1,
+        Math.max(0, this.time / this.ghost.time * this.path.length));
+      const gp = this.path.pointAt(gd);
+      const gt = this.path.tangentAt(gd);
+      const glook = BREEDS[this.ghost.look] || this.breed;
+      ctx.save();
+      ctx.globalAlpha = 0.38;
+      r.drawDog({ x: gp.x, y: gp.y, heading: Math.atan2(gt.y, gt.x),
+        runPhase: this.time * 9, elevation: 0, airborne: false }, glook);
+      ctx.restore();
+      const gs = r.toScreen(gp.x, gp.y, 1.6);
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      ctx.textAlign = 'center';
+      ctx.font = `bold ${Math.round(r.cam.zoom * 0.42)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#b388ff';
+      ctx.fillText(`👻 ${this.ghost.name}`, gs.x, gs.y);
+      ctx.restore();
+    }
+
     let dogDrawn = false;
     for (const m of sorted) {
       if (!onMark && !dogDrawn && m.o.y > dogY && m.o.type !== 'tunnel') { drawDog(); dogDrawn = true; }

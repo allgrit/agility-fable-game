@@ -18,6 +18,8 @@ function defaults() {
     counters: { runs: 0, cleans: 0, perfectRuns: 0 },
     streak: { count: 0, last: '' },   // трасса дня: дней подряд, дата последнего
     quests: { day: '', week: '', daily: [], weekly: [] }, // прогресс заданий
+    bosses: {},        // cls → 1: побеждённые боссы-призраки (карьера 2.0)
+    ngplusUnlocked: 0, // гранд-финал пройден — открыт NG+ (окна ×0.85)
   };
 }
 

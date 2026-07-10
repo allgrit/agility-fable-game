@@ -502,6 +502,32 @@ test('V4 finalScore: bonus добавляется к очкам (Golden Weave, �
   assert.equal(bonused.points - base.points, 1500);
 });
 
+test('V4 карьера 2.0: боссы, сезоны, реплики, газеты', async () => {
+  const { BOSSES, SEASONS, pickLine, startLineFor, newspaperFor, bossFor, LINES } =
+    await import('../js/career.js');
+  // Боссы: 4 класса, k строго убывает к 1.01
+  const ks = ['novice', 'open', 'excellent', 'masters'].map(c => BOSSES[c].k);
+  assert.deepEqual(ks, [1.18, 1.10, 1.05, 1.01]);
+  for (const cls of Object.keys(BOSSES)) {
+    assert.ok(BOSSES[cls].name && BOSSES[cls].intro && BOSSES[cls].taunt);
+    assert.ok(SEASONS[cls], `сезон для ${cls}`);
+  }
+  assert.ok(SEASONS.worldcup);
+  assert.equal(bossFor('worldcup'), null);
+  // Банк реплик: суммарно достаточно строк, pickLine ротирует без повторов подряд
+  const total = Object.values(LINES).reduce((s, arr) => s + arr.length, 0);
+  assert.ok(total >= 30, `реплик: ${total}`);
+  const a = pickLine('fault'), b = pickLine('fault');
+  assert.notEqual(a, b, 'ротация фраз');
+  assert.ok(startLineFor('career', 'novice'));
+  assert.ok(startLineFor('worldcup', 'masters'));
+  // Газета: заголовок для каждого босса, подстановка имени и дельты
+  for (const cls of Object.keys(BOSSES)) {
+    const p = newspaperFor(BOSSES[cls], 'Хлоя', 30, 31.5);
+    assert.ok(p.title && p.sub.includes('Хлоя'), `${cls}: газета`);
+  }
+});
+
 test('каталог косметики валиден: id уникальны, слоты/редкости известны, окрасы полны', async () => {
   const { ITEMS, RARITY, SLOT_NAMES } = await import('../js/cosmetics.js');
   const { BREEDS } = await import('../js/scoring.js');
