@@ -1638,6 +1638,34 @@ const KEY_LABEL = IS_TOUCH
   ? { Space: 'ХОП', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' }
   : { Space: 'ПРОБЕЛ', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
 
+// Микро-подсказки на подлёте к сложным снарядам: что делать ПОСЛЕ первого нажатия.
+// Показываются каждый раз (в отличие от разовых slow-mo HINTS) — снимают панику
+// «нажал, а дальше что?». Ключ = тип снаряда.
+const APPROACH_HINTS = {
+  tire:    () => `${KEY_LABEL.Space} дважды — второй в верхней точке!`,
+  spread:  () => `Зажми ${KEY_LABEL.Space} — отпусти в жёлтом секторе`,
+  triple:  () => `Зажми ${KEY_LABEL.Space} — сектор узкий, целься!`,
+  table:   () => `${KEY_LABEL.Space} на заход · потом ЗАМРИ до GO`,
+  seesaw:  () => `${KEY_LABEL.ArrowUp} на заход · по опусканию — ${KEY_LABEL.Space}`,
+  aframe:  () => `Зажми ${KEY_LABEL.ArrowUp} — отпусти в жёлтой зоне`,
+  dogwalk: () => `Зажми ${KEY_LABEL.ArrowUp} — отпусти в жёлтой зоне`,
+  serpentine: () => 'Стрелки по подсветке — жми в темп',
+};
+
+function drawApproachHint(ctx, type, cx, cy, z) {
+  const fn = APPROACH_HINTS[type];
+  if (!fn) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  const txt = fn();
+  ctx.strokeText(txt, cx, cy - 66 * z);
+  ctx.fillStyle = '#cfe8ff';
+  ctx.fillText(txt, cx, cy - 66 * z);
+  ctx.restore();
+}
+
 function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
@@ -1673,6 +1701,7 @@ function drawQte(run, m, z) {
     drawGrooveLane(ctx, run, m, cx, cy, w, z);
   } else if (def.kind === 'serp') {
     // Серпантин: стрелки раскрываются за reveal до бита, до того — «?»
+    drawApproachHint(ctx, 'serpentine', cx, cy, z);
     const step = Math.min(80 * z, (w * 0.8) / def.count);
     const kr = step * 0.42;
     for (let i = 0; i < def.count; i++) {
@@ -1750,7 +1779,9 @@ function drawQte(run, m, z) {
         inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
     }
   } else {
-    // стадия захода holdRelease/hold/twoStage: клавиша + сжимающееся кольцо тайминга
+    // стадия захода holdRelease/hold/twoStage/freeze/charge/doubleTap:
+    // клавиша + сжимающееся кольцо тайминга + микро-подсказка «что дальше»
+    drawApproachHint(ctx, m.o.type, cx, cy, z);
     const key = def.key;
     const rem = Math.max(0, q.target - t);
     const closeness = 1 - Math.min(1, rem / def.lead);

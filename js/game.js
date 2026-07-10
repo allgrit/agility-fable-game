@@ -272,14 +272,23 @@ export class Run {
     let target = this.baseSpeed() * this.comboMul() * (1 + this.sprint.boost);
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
     if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
-    if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
+    if (m && !m.resolved && m.o.type === 'weave' && m.qte
+        && m.qte.def.kind === 'groove' && m.qte.state === 'active') {
+      // Groove-слалом: собака идёт «стойка-в-бит» — позиция привязана к битам,
+      // визуал и ритм не расходятся. При возврате на 1-ю стойку отбегает назад.
+      const q = m.qte;
+      const beatProgress = Math.min(1, q.beatIdx / q.def.beats);
+      const wantD = m.entryD + beatProgress * (m.exitD - m.entryD);
+      const tq = this.time - m.qteStart;
+      const eta = Math.max(0.15, (q.nextBeatT ?? tq) - tq);
+      target = Math.min(target, Math.max(-2.5, (wantD - d.dist) / eta));
+    } else if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
       // На "синхронных" снарядах не убегаем дальше точки ожидания
       // (градиентное замедление — без ощущения "вкопанной" остановки).
       const waitAt = this._waitPoint(m);
       if (d.dist >= waitAt) target = Math.min(target, 0);
       else if (d.dist >= waitAt - 1.2) target = Math.min(target, 2.0);
       else if (d.dist >= waitAt - 2.0) target = Math.min(target, 3.0);
-      if (m.o.type === 'weave' && d.dist > m.entryD - 0.5) target = Math.min(target, 2.4);
     }
     if (m && m.refusalT > 0) { m.refusalT -= dt; target = 0.4; }
     for (const mm of this.marks) {
