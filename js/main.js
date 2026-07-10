@@ -258,7 +258,27 @@ canvas.addEventListener('pointerdown', (e) => {
     app.state = 'board'; audio.click(); return;
   }
   if (app.state === 'menu') menuClick(p.x, p.y);
-  else if (app.state === 'results') resultsKey('Enter');
+  else if (app.state === 'results') {
+    // Секвенция ещё идёт — первый тап всегда скип
+    if (app.run && app.run.finishT < 3.4) { app.run.finishT = 3.4; audio.click(); return; }
+    if (IS_TOUCH) {
+      const w2 = canvas.width, h2 = canvas.height;
+      const z2 = Math.min(w2, h2) / 700;
+      const pw2 = Math.min(520 * z2, w2 * 0.9), ph2 = Math.min(570 * z2, h2 * 0.88);
+      const px2 = w2 / 2 - pw2 / 2, py2 = h2 / 2 - ph2 / 2;
+      for (const b of resultsButtons(px2, py2, pw2, ph2, z2)) {
+        if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+          audio.click();
+          if (b.id === 'next') return resultsKey('Enter');
+          if (b.id === 'retry') return resultsKey('KeyR');
+          if (b.id === 'share') return shareResult();
+          if (b.id === 'menu') return resultsKey('Escape');
+        }
+      }
+      return; // тап мимо кнопок — ничего (не случайный рестарт)
+    }
+    resultsKey('Enter');
+  }
 });
 function releaseTouch(e) {
   const code = touchPointers.get(e.pointerId);
@@ -1120,7 +1140,7 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min(460 * z, h * 0.85);
+  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 570 : 460) * z, h * 0.88);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   ctx.save();
   ctx.fillStyle = `rgba(6,12,10,${0.72 * ease(0, 0.3)})`;
@@ -1189,22 +1209,52 @@ function drawResults(run, z) {
   }
 
   if (ft > 1.0) {
-    ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
-    const nextLabel = app.mode === 'career'
+    const nextText = app.mode === 'career'
       ? (res.qualified
         ? (app.stage >= STAGES && app.cls !== 'masters'
-          ? `ENTER — класс ${CLASSES[nextClass(app.cls)].name}!`
-          : 'ENTER — следующая трасса')
-        : 'ENTER — ещё попытка')
-      : app.mode === 'daily' ? 'ENTER — ещё попытка (лучший идёт в зачёт)'
-      : 'ENTER — следующая трасса чемпионата';
-    ctx.fillText(nextLabel, w / 2, py + ph - 64 * z);
-    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillText('R — переиграть · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+          ? `Класс ${CLASSES[nextClass(app.cls)].name}!`
+          : 'Следующая трасса')
+        : 'Ещё попытка')
+      : app.mode === 'daily' ? 'Ещё попытка (лучший в зачёт)'
+      : 'Следующая трасса чемпионата';
+    if (IS_TOUCH) {
+      // Тач: настоящие кнопки вместо клавиатурных подсказок
+      for (const b of resultsButtons(px, py, pw, ph, z)) {
+        ctx.save();
+        ctx.fillStyle = b.id === 'next' ? 'rgba(255,213,74,0.92)' : 'rgba(20,36,26,0.95)';
+        ctx.strokeStyle = b.id === 'next' ? '#ffd54a' : 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 12 * z); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = b.id === 'next' ? '#1a1a1a' : '#fff';
+        ctx.font = `bold ${Math.round((b.id === 'next' ? 19 : 14) * z)}px "Segoe UI", sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(b.id === 'next' ? nextText : b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+        ctx.restore();
+      }
+      ctx.textBaseline = 'alphabetic';
+    } else {
+      ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+      ctx.fillText(`ENTER — ${nextText.toLowerCase()}`, w / 2, py + ph - 64 * z);
+      ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillText('R — переиграть · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+    }
   }
   ctx.restore();
+}
+
+// Тач-кнопки экрана результатов: большая «Дальше» + ряд действий под ней
+function resultsButtons(px, py, pw, ph, z) {
+  const bw = pw - 48 * z, bh = 52 * z;
+  const rowY = py + ph - 62 * z;
+  const smallW = (bw - 16 * z) / 3;
+  return [
+    { id: 'next', x: px + 24 * z, y: rowY - bh - 12 * z, w: bw, h: bh },
+    { id: 'retry', label: '↺ Ещё раз', x: px + 24 * z, y: rowY, w: smallW, h: 44 * z },
+    { id: 'share', label: '📤 Поделиться', x: px + 24 * z + smallW + 8 * z, y: rowY, w: smallW, h: 44 * z },
+    { id: 'menu', label: '⌂ Меню', x: px + 24 * z + (smallW + 8 * z) * 2, y: rowY, w: smallW, h: 44 * z },
+  ];
 }
 
 // Шеринг: эмодзи-строка (паттерн Wordle) в буфер + PNG-карточка текущего кадра

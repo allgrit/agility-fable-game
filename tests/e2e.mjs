@@ -327,6 +327,46 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
   check('портретное меню: карточки в экране, над «на старт»',
     pLayout.n === 5 && pLayout.inCanvas && pLayout.aboveStart, JSON.stringify(pLayout));
 
+  // Экран результатов на таче: кнопки в панели, тап «Ещё раз» перезапускает
+  const resBtns = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.app.cls = 'novice'; A.app.stage = 1; A.setMode('career');
+    A.startRun();
+    const run = A.app.run;
+    const proto = Object.getPrototypeOf(run);
+    run.update = () => {};
+    let guard = 0;
+    while (guard++ < 40000 && run.phase !== 'finished') {
+      const m = run.activeMark;
+      if (m && m.qte && m.qte.state === 'active') {
+        const q = m.qte, t = run.time - m.qteStart, d = q.def;
+        if (d.kind === 'press' && t >= q.target - 0.01) run.input(d.key, true);
+      }
+      proto.update.call(run, 1 / 60);
+    }
+    run.finishT = 4; // сразу к финальному состоянию протокола
+    delete run.update;
+    await new Promise(r => setTimeout(r, 600));
+    if (A.app.state !== 'results') return { error: 'not results: ' + A.app.state };
+    const c = document.getElementById('game');
+    const z = Math.min(c.width, c.height) / 700;
+    const pw = Math.min(520 * z, c.width * 0.9), ph = Math.min(570 * z, c.height * 0.88);
+    const px = c.width / 2 - pw / 2, py = c.height / 2 - ph / 2;
+    // Кнопки в границах панели и экрана (формулы resultsButtons)
+    const bw = pw - 48 * z, rowY = py + ph - 62 * z;
+    const inScreen = rowY + 44 * z <= c.height && px + 24 * z >= 0;
+    // Тап по «Ещё раз» (первая маленькая кнопка)
+    const rect = c.getBoundingClientRect();
+    const dpr = c.width / rect.width;
+    const smallW = (bw - 16 * z) / 3;
+    const bx = (px + 24 * z + smallW / 2) / dpr, by = (rowY + 22 * z) / dpr;
+    c.dispatchEvent(new PointerEvent('pointerdown', { clientX: bx, clientY: by, pointerId: 555, bubbles: true }));
+    await new Promise(r => setTimeout(r, 300));
+    return { inScreen, afterTap: A.app.state, phase: A.app.run?.phase };
+  })()`);
+  check('результаты (тач): кнопки в экране, «Ещё раз» перезапускает',
+    resBtns.inScreen && resBtns.afterTap === 'run', JSON.stringify(resBtns));
+
   check('консоль без ошибок (мобильный)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
 }
