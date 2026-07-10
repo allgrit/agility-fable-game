@@ -5,11 +5,11 @@ export class Particles {
     this.ground = []; // следы лап: кольцевой буфер, рисуются ПОД миром
   }
 
-  paw(x, y, heading) {
-    // Пара отпечатков поперёк курса
+  paw(x, y, heading, color) {
+    // Пара отпечатков поперёк курса; цвет — из экипировки следов
     const px = -Math.sin(heading), py = Math.cos(heading);
     for (const side of [-0.14, 0.14]) {
-      this.ground.push({ x: x + px * side, y: y + py * side, life: 1 });
+      this.ground.push({ x: x + px * side, y: y + py * side, life: 1, color });
     }
     if (this.ground.length > 64) this.ground.splice(0, this.ground.length - 64);
   }
@@ -21,7 +21,9 @@ export class Particles {
       const s = toScreen(p.x, p.y);
       ctx.save();
       ctx.globalAlpha = Math.min(0.3, p.life * 0.3);
-      ctx.fillStyle = '#1f4527';
+      ctx.fillStyle = p.color === 'rainbow'
+        ? `hsl(${(p.life * 540) % 360}, 80%, 55%)`
+        : (p.color || '#1f4527');
       ctx.beginPath();
       ctx.ellipse(s.x, s.y, s.scale * 0.07, s.scale * 0.05, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -59,8 +61,13 @@ export class Particles {
     });
   }
 
-  confettiBurst(x, y, n = 60) {
-    const colors = ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb', '#ffab40'];
+  confettiBurst(x, y, n = 60, preset = null) {
+    let colors = ['#ff5252', '#ffd740', '#69f0ae', '#40c4ff', '#e040fb', '#ffab40'];
+    if (preset === 'golden') colors = ['#ffd54a', '#f4c430', '#fff3b0', '#c9a227'];
+    if (preset === 'fireworks') {
+      // три разнесённых залпа искр + обычное конфетти
+      for (const [ox, oy] of [[-2.5, -1], [2.5, -1.5], [0, -3]]) this.sparks(x + ox, y + oy, '#ffd54a');
+    }
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 7;
       const ribbon = i % 5 === 0; // 20% — ленты: медленнее падают, сильнее кувыркаются

@@ -9,6 +9,10 @@ import { QTE_DEFS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
 import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
 import { pickTheme, THEMES } from './themes.js';
+import { loadMeta, saveMeta, earnFromRun, earnXp, rosettesForLevels, dogState,
+  titleFor, xpToNext, streakMult, grantRosette } from './meta.js';
+import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip } from './cosmetics.js';
+import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -116,7 +120,7 @@ function saveDailyBest(points) {
 }
 
 // ---------- МЕДАЛИ (лучшие звёзды за трассу) ----------
-const MEDAL_ICON = { 3: '🥇', 2: '🥈', 1: '🥉' };
+const MEDAL_ICON = { 4: '💎', 3: '🥇', 2: '🥈', 1: '🥉' };
 function loadMedals() {
   try { return JSON.parse(localStorage.getItem('agility_medals') || '{}'); }
   catch { return {}; }
@@ -146,6 +150,13 @@ const breedList = Object.values(BREEDS);
 const breedLocked = (b) => b.unlockAch && !hasAch(b.unlockAch);
 const toasts = []; // {icon, name, desc, t}
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
+// Мета-прогрессия: единое состояние валют/XP/заданий
+const meta = loadMeta();
+{
+  const d = new Date();
+  refreshQuests(meta, d.toDateString(), d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate());
+  saveMeta(meta);
+}
 function openChloe() {
   audio.click();
   window.open(CHLOE_URL, '_blank', 'noopener');
@@ -213,6 +224,15 @@ function trophyZone() {
   return { x: canvas.width - 34 * z, y: 195 * z, r: 26 * z };
 }
 
+function shopZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 325 * z, r: 26 * z };
+}
+function questsZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 390 * z, r: 26 * z };
+}
+
 // Полноэкранный режим (недоступен на iPhone — там прячем кнопку).
 const FS_SUPPORTED = !!(document.documentElement.requestFullscreen);
 function fsZone() {
@@ -234,7 +254,17 @@ window.addEventListener('keydown', (e) => {
     audio.click();
     return;
   }
-  if (app.state === 'board') {
+  if (e.code === 'KeyB' && app.state !== 'run') {
+    app.state = app.state === 'shop' ? 'menu' : 'shop';
+    audio.click();
+    return;
+  }
+  if (e.code === 'KeyJ' && app.state !== 'run') {
+    app.state = app.state === 'quests' ? 'menu' : 'quests';
+    audio.click();
+    return;
+  }
+  if (app.state === 'board' || app.state === 'shop' || app.state === 'quests') {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
     return;
   }
@@ -287,10 +317,22 @@ canvas.addEventListener('pointerdown', (e) => {
     }
     return;
   }
-  if (app.state === 'board') { app.state = 'menu'; audio.click(); return; }
+  if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
+  if (app.state === 'shop') {
+    if (!handleShopTap(p)) { app.state = 'menu'; audio.click(); }
+    return;
+  }
   const tz = trophyZone();
   if (app.state === 'menu' && Math.hypot(p.x - tz.x, p.y - tz.y) < tz.r) {
     app.state = 'board'; audio.click(); return;
+  }
+  const sz = shopZone();
+  if (app.state === 'menu' && Math.hypot(p.x - sz.x, p.y - sz.y) < sz.r) {
+    app.state = 'shop'; audio.click(); return;
+  }
+  const qz = questsZone();
+  if (app.state === 'menu' && Math.hypot(p.x - qz.x, p.y - qz.y) < qz.r) {
+    app.state = 'quests'; audio.click(); return;
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
   if (app.state === 'menu' && inZone(app.chloeZoneMenu)) return openChloe();
@@ -436,7 +478,8 @@ function startRun() {
   }
   const mod = MODIFIERS[activeModifier()];
   renderer.theme = pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
-  app.run = new Run({ course, breed, audio, particles: fx, renderer,
+  const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
+  app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
     modifier: activeModifier(), windowMul: mod.windowMul || 1 });
   renderer.cam.x = course.start.x;
   renderer.cam.y = course.start.y;
@@ -681,7 +724,7 @@ function drawCareerMap(ctx, cx, y, z, portrait) {
         ctx.fillText(stars ? MEDAL_ICON[stars] : '▶', sx, ry);
         ctx.font = `${Math.round(portrait ? 12 * z : 14 * z)}px "Segoe UI", sans-serif`;
       } else if (stars) {
-        ctx.fillText(MEDAL_ICON[stars], sx, ry);
+        ctx.fillText(MEDAL_ICON[Math.min(4, stars)], sx, ry);
       } else {
         ctx.fillStyle = locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.45)';
         ctx.fillText(locked ? '🔒' : '○', sx, ry);
@@ -689,6 +732,158 @@ function drawCareerMap(ctx, cx, y, z, portrait) {
       }
     }
   });
+  ctx.restore();
+}
+
+// ---------- МАГАЗИН / ГАРДЕРОБ ----------
+function drawShop() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.85)';
+  ctx.fillRect(0, 0, w, h);
+  const pw = Math.min(680 * z, w * 0.96), ph = Math.min(600 * z, h * 0.94);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  panel(ctx, px, py, pw, ph);
+  const breed = breedList[app.breedIdx];
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`🛍 Магазин · Гардероб (${breed.name})`, w / 2, py + 34 * z);
+  ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#ffe9a8';
+  ctx.fillText(`Баланс: 🦴 ${meta.bones} · 🏵️ ${meta.rosettes}   ·   тап: купить / надеть / снять`, w / 2, py + 58 * z);
+
+  const dnum = (new Date().getFullYear()) * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate();
+  const showcase = dailyShowcase(dnum);
+  const cols = isPortrait() ? 2 : 4;
+  const cw = (pw - 32 * z) / cols, chh = 62 * z;
+  const equip = dogState(meta, breed.id).equip;
+  app.shopCells = [];
+  ITEMS.forEach((it, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = px + 16 * z + col * cw, y = py + 76 * z + row * (chh + 6 * z);
+    if (y + chh > py + ph - 40 * z) return;
+    const owned = !!meta.owned[it.id];
+    const equipped = owned && equip[it.slot] === it.id;
+    const onSale = showcase.includes(it.id);
+    const rc = { common: '#9e9e9e', rare: '#4fc3f7', epic: '#b388ff', legendary: '#ffd54a' }[it.rarity];
+    ctx.fillStyle = equipped ? 'rgba(60,90,60,0.9)' : 'rgba(16,28,22,0.9)';
+    ctx.strokeStyle = rc; ctx.lineWidth = equipped ? 3 : 1.5;
+    ctx.beginPath(); ctx.roundRect(x, y, cw - 8 * z, chh, 8 * z); ctx.fill(); ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.round(12.5 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(it.name.slice(0, 22), x + 8 * z, y + 17 * z);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = `${Math.round(10.5 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`${SLOT_NAMES[it.slot]}${it.breed ? ' · ' + (BREEDS[it.breed]?.name || '') : ''}`, x + 8 * z, y + 31 * z);
+    ctx.font = `bold ${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+    if (equipped) { ctx.fillStyle = '#9ff0b4'; ctx.fillText('✓ Надето', x + 8 * z, y + 49 * z); }
+    else if (owned) { ctx.fillStyle = '#8fd8ff'; ctx.fillText('Куплено — надеть', x + 8 * z, y + 49 * z); }
+    else {
+      const pr = priceOf(it);
+      const cost = pr.rosettes && !pr.bones ? `${pr.rosettes} 🏵️` : `${Math.round(pr.bones * (onSale ? 0.7 : 1))} 🦴`;
+      ctx.fillStyle = onSale ? '#ffd54a' : '#ffe9a8';
+      ctx.fillText(`${cost}${onSale ? '  −30%!' : ''}`, x + 8 * z, y + 49 * z);
+    }
+    app.shopCells.push({ x, y, w: cw - 8 * z, h: chh, id: it.id });
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('B / ESC / тап мимо — назад', w / 2, py + ph - 18 * z);
+  ctx.restore();
+}
+
+function handleShopTap(p) {
+  for (const c of app.shopCells || []) {
+    if (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h) {
+      const it = itemById(c.id);
+      const breed = breedList[app.breedIdx];
+      const equip = dogState(meta, breed.id).equip;
+      if (meta.owned[it.id]) {
+        if (it.slot === 'coat' && it.breed && it.breed !== breed.id) {
+          toasts.push({ icon: '🚫', name: 'Не подходит', desc: 'Этот окрас для другой породы', t: 0 });
+        } else if (equip[it.slot] === it.id) {
+          delete equip[it.slot];
+          audio.click();
+        } else {
+          equip[it.slot] = it.id;
+          audio.good();
+        }
+      } else {
+        const dnum = (new Date().getFullYear()) * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate();
+        const sale = dailyShowcase(dnum).includes(it.id);
+        const pr = priceOf(it);
+        const bonesCost = pr.bones ? Math.round(pr.bones * (sale ? 0.7 : 1)) : 0;
+        if (pr.rosettes && !pr.bones) {
+          if (meta.rosettes >= pr.rosettes) {
+            meta.rosettes -= pr.rosettes; meta.owned[it.id] = 1;
+            toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
+            audio.perfect();
+          } else { toasts.push({ icon: '🏵️', name: 'Не хватает розеток', desc: `Нужно ${pr.rosettes}`, t: 0 }); audio.miss(); }
+        } else if (meta.bones >= bonesCost) {
+          meta.bones -= bonesCost; meta.owned[it.id] = 1;
+          toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
+          audio.perfect();
+        } else { toasts.push({ icon: '🦴', name: 'Не хватает косточек', desc: `Нужно ${bonesCost}`, t: 0 }); audio.miss(); }
+      }
+      saveMeta(meta);
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------- ЗАДАНИЯ ----------
+function drawQuests() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.85)';
+  ctx.fillRect(0, 0, w, h);
+  const pw = Math.min(560 * z, w * 0.94), ph = Math.min(480 * z, h * 0.9);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  panel(ctx, px, py, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('📋 Задания', w / 2, py + 36 * z);
+
+  const row = (st, y) => {
+    const def = questDef(st.id);
+    if (!def) return;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = st.done ? '#9ff0b4' : '#fff';
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`${st.done ? '✓ ' : ''}${def.name}`, px + 28 * z, y);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText(st.done ? `+${def.bones} 🦴${def.rosettes ? ` +${def.rosettes} 🏵️` : ''}`
+      : `${st.progress}/${def.target}`, px + pw - 28 * z, y);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(px + 28 * z, y + 7 * z, pw - 56 * z, 5 * z);
+    ctx.fillStyle = st.done ? '#69f0ae' : '#ffd54a';
+    ctx.fillRect(px + 28 * z, y + 7 * z, (pw - 56 * z) * Math.min(1, st.progress / def.target), 5 * z);
+  };
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('СЕГОДНЯ (сброс в полночь)', px + 28 * z, py + 66 * z);
+  (meta.quests.daily || []).forEach((st, i) => row(st, py + (92 + i * 44) * z));
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('НЕДЕЛЯ (сброс в понедельник)', px + 28 * z, py + 240 * z);
+  (meta.quests.weekly || []).forEach((st, i) => row(st, py + (266 + i * 44) * z));
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe9a8';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`Все 3 дневных = +50 🦴 бонусом · Баланс: 🦴 ${meta.bones} · 🏵️ ${meta.rosettes}`, w / 2, py + ph - 44 * z);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText('J / ESC / тап — назад', w / 2, py + ph - 18 * z);
   ctx.restore();
 }
 
@@ -799,14 +994,25 @@ function drawToasts(dt) {
 
 function drawTrophyIcon() {
   const ctx = renderer.ctx;
-  const tz = trophyZone();
   ctx.save();
   ctx.globalAlpha = 0.8;
-  ctx.fillStyle = 'rgba(10,20,15,0.55)';
-  ctx.beginPath(); ctx.arc(tz.x, tz.y, tz.r, 0, Math.PI * 2); ctx.fill();
-  ctx.font = `${Math.round(tz.r * 1.05)}px "Segoe UI", sans-serif`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('🏆', tz.x, tz.y + 2);
+  const qDone = (meta.quests.daily || []).filter(q => q.done).length;
+  for (const [zone, icon, badge] of [
+    [trophyZone(), '🏆', null],
+    [shopZone(), '🛍', null],
+    [questsZone(), '📋', qDone < 3 ? `${qDone}/3` : '✓'],
+  ]) {
+    ctx.fillStyle = 'rgba(10,20,15,0.55)';
+    ctx.beginPath(); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2); ctx.fill();
+    ctx.font = `${Math.round(zone.r * 1.05)}px "Segoe UI", sans-serif`;
+    ctx.fillText(icon, zone.x, zone.y + 2);
+    if (badge) {
+      ctx.font = `bold ${Math.round(zone.r * 0.55)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = badge === '✓' ? '#9ff0b4' : '#ffd54a';
+      ctx.fillText(badge, zone.x, zone.y + zone.r + 9);
+    }
+  }
   ctx.restore();
 }
 
@@ -1181,10 +1387,11 @@ function drawMenu(dt) {
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.65)';
   ctx.fillText('← → выбор породы · ПРОБЕЛ прыжок · ↓ туннель · ←→ слалом · ↑ горка/бум · L — лидерборд', w / 2, h * 0.88);
-  if (app.bestPoints) {
-    ctx.fillStyle = '#ffd54a';
-    ctx.fillText(`Рекорд: ${app.bestPoints} очков`, w / 2, h * 0.93);
-  }
+  ctx.fillStyle = '#ffd54a';
+  const balanceLine = `🦴 ${meta.bones}   🏵️ ${meta.rosettes}` +
+    (app.bestPoints ? `   ·   Рекорд: ${app.bestPoints}` : '') +
+    (meta.streak.count >= 2 ? `   ·   🔥 серия ${meta.streak.count} дн (×${streakMult(meta.streak.count)})` : '');
+  ctx.fillText(balanceLine, w / 2, h * 0.93);
   ctx.restore();
 }
 
@@ -1306,6 +1513,52 @@ function drawResults(run, z) {
       localStorage.setItem('agility_best', String(app.bestPoints));
     }
     saveRunToBoard(run, app.result);
+
+    // ---- V2 Мета: перфект-челлендж (4-я звезда), валюты, XP, задания ----
+    if (!run.warmup) {
+      const res0 = app.result;
+      // 4-я звезда: все перфекты + 0 фолтов + запас времени >= 3с
+      if (res0.stars === 3 && run.score.perfects === run.marks.length
+          && res0.totalFaults === 0 && run.time <= run.sct - 3) {
+        res0.stars = 4;
+        app.newMedal = recordMedal(4) || app.newMedal;
+      }
+      const trackId = courseKey();
+      const earned = earnFromRun(meta, {
+        points: res0.points, stars: Math.min(3, res0.stars), trackId,
+        isDaily: app.mode === 'daily', todayStr: todayStr(),
+      });
+      // Розетки-вехи: первое золото трассы, чистая ЧМ-трасса
+      let ros = 0;
+      if (res0.stars >= 3) ros += grantRosette(meta, `gold:${trackId}`, 1);
+      if (app.mode === 'worldcup' && res0.clean) ros += grantRosette(meta, `wcq:${trackId}`, 2);
+      // XP собаки
+      const breedId = breedList[app.breedIdx].id;
+      const xp = earnXp(meta, breedId, { points: res0.points, stars: Math.min(3, res0.stars), clean: res0.clean });
+      ros += rosettesForLevels(meta, breedId, xp.levelsUp);
+      for (const L of xp.levelsUp) {
+        const tag = titleFor(L);
+        toasts.push({ icon: '🐕', name: `Уровень ${L}!`, desc: tag ? `Новый титул: ${tag}` : `${breedList[app.breedIdx].name} растёт`, t: 0 });
+      }
+      // Задания
+      const ev = {
+        run: 1,
+        clean: res0.clean ? 1 : 0,
+        perfect: run.score.perfects,
+        obstacle: run.marks.length,
+        combo10: run.score.maxCombo >= 10 ? 1 : 0,
+        daily: app.mode === 'daily' ? 1 : 0,
+        medal: res0.stars >= 1 ? 1 : 0,
+        gold: res0.stars >= 3 ? 1 : 0,
+        tunnel: run.marks.filter(m => m.o.type === 'tunnel').length,
+      };
+      const doneNow = applyRunToQuests(meta, ev);
+      const claimed = claimDone(meta);
+      for (const dq of doneNow) toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 });
+      app.lastEarn = { bones: earned.bones + (claimed.bones || 0), detail: earned.detail,
+        rosettes: ros + (claimed.rosettes || 0), xp: xp.gained, breedId };
+      saveMeta(meta);
+    }
   }
   const res = app.result;
   // Протокол судьи печатается поэтапно (ft = сек после финиша); скип — любая клавиша.
@@ -1381,6 +1634,25 @@ function drawResults(run, z) {
     ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffd54a';
     ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
+  }
+
+  // V2: заработанное за прогон + XP-бар собаки
+  if (app.lastEarn && ft > 3.3) {
+    const e = app.lastEarn;
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? `   +${e.rosettes} 🏵️` : ''}   +${e.xp} XP`,
+      w / 2, py + (IS_TOUCH ? 428 : 372) * z);
+    const d = dogState(meta, e.breedId);
+    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + (IS_TOUCH ? 444 : 386) * z;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(bx2, by2, bw2, 7 * z);
+    ctx.fillStyle = '#69f0ae';
+    ctx.fillRect(bx2, by2, bw2 * Math.min(1, d.xp / xpToNext(d.level)), 7 * z);
+    ctx.font = `${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    const tg = titleFor(d.level);
+    ctx.fillText(`${tg ? tg + ' · ' : ''}уровень ${d.level}`, w / 2, by2 + 20 * z);
   }
 
   // Промо Хлои: после провала — поддержка, после победы — приглашение в дневник
@@ -1480,12 +1752,14 @@ function frame(now) {
   last = now;
   app.t += dt;
 
-  if (app.state === 'menu' || app.state === 'board') {
+  if (app.state === 'menu' || app.state === 'board' || app.state === 'shop' || app.state === 'quests') {
     audio.music?.setState('menu');
     drawMenu(dt);
     drawMuteIcon();
     drawTrophyIcon();
     if (app.state === 'board') drawBoard();
+    if (app.state === 'shop') drawShop();
+    if (app.state === 'quests') drawQuests();
     drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);
@@ -1510,6 +1784,7 @@ requestAnimationFrame(frame);
 
 // Хук для тестового харнесса (Playwright)
 window.__agility = {
+  meta, saveMeta: () => saveMeta(meta),
   app, startRun,
   setMode(m) { app.mode = m; },
   setClass(c) { app.cls = c; },

@@ -246,7 +246,7 @@ export class Run {
       if (clean) { this.audio.fanfare(); this.audio.cheer(true); }
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
-      this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40);
+      this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
       this.emit({ type: 'finish' });
     }
   }
@@ -438,7 +438,7 @@ export class Run {
     this._pawAcc = (this._pawAcc || 0) + d.speed * dt;
     if (this._pawAcc > 0.9 && !d.airborne && !d.hidden && this.phase === 'running') {
       this._pawAcc = 0;
-      this.fx.paw(d.x, d.y, d.heading);
+      this.fx.paw(d.x, d.y, d.heading, this.breed.pawColor || null);
     }
     if (!this.trail) this.trail = [];
     this._trailAcc = (this._trailAcc || 0) + dt;

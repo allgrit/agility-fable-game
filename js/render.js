@@ -480,6 +480,26 @@ export class Renderer {
     ctx.beginPath();
     ctx.ellipse(6 * stretch, 1.5, 6 * stretch * 0.7, 4.4, 0, 0, Math.PI * 2);
     ctx.fill();
+    // Экипировка на шее: бандана-косынка или ошейник
+    if (breed.neckItem) {
+      const ni = breed.neckItem;
+      const col = ni.color === 'rainbow' ? `hsl(${(this.time * 90) % 360}, 85%, 60%)` : ni.color;
+      if (ni.kind === 'bandana') {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(8 * stretch, -5);
+        ctx.lineTo(11 * stretch, 3);
+        ctx.lineTo(4 * stretch, 5 + Math.sin(this.time * 6) * 1.2);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.ellipse(9.5 * stretch, -2, 4.6, 3.4, -0.2, 0.4, Math.PI * 1.4);
+        ctx.stroke();
+      }
+    }
     // Кудри пуделя: облачка по контуру тела
     if (breed.curly) {
       ctx.fillStyle = breed.curly;
