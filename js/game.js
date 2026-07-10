@@ -42,7 +42,7 @@ export class Run {
       heading: 0, elevation: 0, airborne: false, runPhase: 0,
       happy: false, hidden: false,
     };
-    this.handler = { x: course.start.x - 1.5, y: course.start.y + 2, runPhase: 0, speed: 0, facing: 1, commanding: false, speech: null };
+    this.handler = { x: course.start.x - 1.5, y: course.start.y + 2, runPhase: 0, speed: 0, facing: 1, commanding: false, speech: null, shirt: breed.handlerShirt || null };
     this.phase = 'countdown';   // countdown → running → finished
     this.countdownT = 2.2;      // ритуал старта: тишина, стойка, рука судьи
     this.sprint = { active: false, boost: 0, lastKey: null };
@@ -246,7 +246,7 @@ export class Run {
       if (clean) { this.audio.fanfare(); this.audio.cheer(true); }
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
-      this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40);
+      this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
       this.emit({ type: 'finish' });
     }
   }
@@ -438,7 +438,7 @@ export class Run {
     this._pawAcc = (this._pawAcc || 0) + d.speed * dt;
     if (this._pawAcc > 0.9 && !d.airborne && !d.hidden && this.phase === 'running') {
       this._pawAcc = 0;
-      this.fx.paw(d.x, d.y, d.heading);
+      this.fx.paw(d.x, d.y, d.heading, this.breed.pawColor || null);
     }
     if (!this.trail) this.trail = [];
     this._trailAcc = (this._trailAcc || 0) + dt;
@@ -566,9 +566,19 @@ export class Run {
       ctx.strokeStyle = inPerfect ? '#ffd54a' : inGood ? '#69f0ae' : 'rgba(255,255,255,0.65)';
       ctx.lineWidth = inPerfect ? r.cam.zoom * 0.14 : r.cam.zoom * 0.08;
       if (inPerfect) { ctx.shadowColor = '#ffd54a'; ctx.shadowBlur = 14; }
+      // Колорблайнд: форма дублирует цвет — пунктир вне окна, двойной контур в perfect
+      if (r.colorblind && !inGood) ctx.setLineDash([r.cam.zoom * 0.25, r.cam.zoom * 0.18]);
       ctx.beginPath();
       ctx.ellipse(s.x, s.y, rad, rad * 0.8, 0, 0, Math.PI * 2);
       ctx.stroke();
+      if (r.colorblind && inPerfect) {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = r.cam.zoom * 0.05;
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y, rad * 1.12, rad * 0.9, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 

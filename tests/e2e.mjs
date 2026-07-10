@@ -263,6 +263,67 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     && warmup.onboarded === '1' && warmup.afterState === 'run' && !!warmup.afterWarmup,
     JSON.stringify(warmup));
 
+  // V2 Мета: чистый прогон начисляет косточки и XP, магазин продаёт и одевает
+  const metaTest = await page.evaluate(`(async () => {
+    localStorage.removeItem('agility_meta');
+    location.reload();
+    return 'reloading';
+  })()`).catch(() => 'nav');
+  await page.waitForFunction(() => !!window.__agility);
+  const v2 = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.setMode('career'); A.app.cls = 'novice'; A.app.stage = 1; A.app.breedIdx = 0;
+    A.startRun();
+    const run = A.app.run;
+    const proto = Object.getPrototypeOf(run);
+    run.update = () => {};
+    let guard = 0;
+    while (guard++ < 40000 && run.phase !== 'finished') {
+      const m = run.activeMark;
+      if (m && m.qte && m.qte.state === 'active') {
+        const q = m.qte, t = run.time - m.qteStart, d = q.def;
+        if (d.kind === 'press' && t >= q.target - 0.01) run.input(d.key, true);
+      }
+      proto.update.call(run, 1 / 60);
+    }
+    run.finishT = 4;
+    delete run.update;
+    await new Promise(r => setTimeout(r, 700));
+    const meta1 = JSON.parse(localStorage.getItem('agility_meta'));
+    // Магазин: купить красную бандану напрямую через ячейки
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape' })); // в меню
+    await new Promise(r => setTimeout(r, 200));
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyB' }));
+    await new Promise(r => setTimeout(r, 400));
+    const c = document.getElementById('game');
+    const rect = c.getBoundingClientRect();
+    const sx = c.width / rect.width, sy = c.height / rect.height;
+    const cell = (window.__agility.app.shopCells || []).find(k => k.id === 'neck-bandana-red');
+    if (!cell) return { error: 'нет ячейки банданы', state: A.app.state };
+    const tap = () => c.dispatchEvent(new PointerEvent('pointerdown', {
+      clientX: rect.left + (cell.x + cell.w / 2) / sx,
+      clientY: rect.top + (cell.y + cell.h / 2) / sy, pointerId: 321, bubbles: true }));
+    window.__agility.meta.bones += 200; window.__agility.saveMeta();
+    tap(); // покупка
+    await new Promise(r => setTimeout(r, 150));
+    tap(); // надеть
+    await new Promise(r => setTimeout(r, 150));
+    const meta2 = JSON.parse(localStorage.getItem('agility_meta'));
+    return {
+      bonesEarned: meta1.bones,
+      xp: (meta1.dogs.border || {}).xp >= 0 && (meta1.dogs.border || {}).level >= 1,
+      bought: !!meta2.owned['neck-bandana-red'],
+      equipped: meta2.dogs.border?.equip?.neck === 'neck-bandana-red',
+      spentExact: meta2.bones === meta1.bones + 200 - 150, // бюджет теста минус цена банданы
+      questsProgress: (meta2.quests.daily || []).some(q => q.progress > 0 || q.done),
+    };
+  })()`);
+  check('V2: прогон начисляет 🦴 и XP, задания двигаются',
+    v2.bonesEarned > 0 && v2.xp && v2.questsProgress, JSON.stringify(v2));
+  check('V2: магазин продаёт за 🦴 и надевает бандану',
+    v2.bought && v2.equipped && v2.spentExact, JSON.stringify(v2));
+  await shot(page, 'desktop-shop');
+
   check('консоль без ошибок (десктоп)', consoleErrors.length === 0, consoleErrors.join(' | '));
   await context.close();
 }
