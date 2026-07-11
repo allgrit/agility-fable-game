@@ -2580,11 +2580,11 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 626 : 556) * z, h * 0.94);
+  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 668 : 600) * z, h * 0.96);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
-  // Слоты нижней части протокола — единый ритм, без слипания (по ревью Codex):
-  //   slot1 — итог против времени/призрака, slot2 — медаль-баннер, slot3 — награда+XP, slot4 — промо
-  const SL = { one: 332 * z, two: 372 * z, earn: 410 * z, chloe: 456 * z };
+  // Слоты нижней части протокола: медаль — герой (крупная, без рамки), внизу у Хлои воздух.
+  //   slot1 — итог против времени/призрака, medal — крупная медаль, earn — награда+XP, chloe — промо
+  const SL = { one: 334 * z, medal: 394 * z, medalCap: 414 * z, earn: 438 * z, chloe: 496 * z };
   ctx.save();
   // Сильнее гасим сцену за протоколом (по ревью Codex: конфетти/HUD мешали читать)
   ctx.fillStyle = `rgba(6,12,10,${0.86 * ease(0, 0.3)})`;
@@ -2692,25 +2692,22 @@ function drawResults(run, z) {
     ctx.fillText(msg, w / 2, py + SL.one);
   }
 
-  // slot2 — медаль баннером (мокап): пилюля с иконкой слева и подписью
+  // Медаль — герой протокола: крупная, без рамки, с лёгким свечением и bounce.
   if (res.stars > 0 && ft >= 3.0) {
     stamp(3.0);
     const k = ease(3.0, 0.35);
-    const bounce = 1 + Math.sin(k * Math.PI) * 0.4;
-    const medalName = { 4: 'Бриллиант', 3: 'Золото', 2: 'Серебро', 1: 'Бронза' }[res.stars] || '';
-    const cap = app.newMedal && ft > 3.4 ? 'Новая медаль!' : medalName;
-    const bw = pw - 100 * z, bx = w / 2 - bw / 2, byy = py + SL.two - 16 * z;
+    const bounce = 1 + Math.sin(k * Math.PI) * 0.5;
     ctx.save();
-    ctx.fillStyle = 'rgba(255,213,74,0.14)';
-    ctx.strokeStyle = 'rgba(255,213,74,0.5)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.roundRect(bx, byy, bw, 32 * z, 10 * z); ctx.fill(); ctx.stroke();
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.font = `${Math.round(22 * z * bounce)}px "Segoe UI", sans-serif`;
-    ctx.fillText(MEDAL_ICON[res.stars], bx + 14 * z, byy + 16 * z + 1);
-    ctx.fillStyle = '#ffe9a8';
-    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillText(cap, bx + 46 * z, byy + 16 * z + 1);
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(255,213,74,0.6)'; ctx.shadowBlur = 18 * z;
+    ctx.font = `${Math.round(52 * z * bounce)}px "Segoe UI", sans-serif`;
+    ctx.fillText(MEDAL_ICON[res.stars], w / 2, py + SL.medal);
     ctx.restore();
+    if (app.newMedal && ft > 3.4) {
+      ctx.fillStyle = '#ffd54a';
+      ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText('Новая медаль!', w / 2, py + SL.medalCap);
+    }
   }
 
   // slot3 — награда за прогон + XP-бар собаки, сгруппированы в блок
