@@ -39,6 +39,7 @@ const RUNNER = `(async (opts) => {
   A.setMode(opts.mode || 'career');
   if (opts.cls) A.app.cls = opts.cls;
   if (opts.stage) A.app.stage = opts.stage;
+  A.app.testDrive = !!opts.testDrive; // сброс между сценами — иначе призрак утекает
   if (opts.realIdx !== undefined) A.app.realIdx = opts.realIdx;
   A.app.breedIdx = opts.breedIdx ?? 3; // Хлоя по умолчанию — виден мерль
   if (opts.equip) { // окрас/экипировка: выдаём предмет и надеваем перед стартом
@@ -224,6 +225,22 @@ const SCENES = [
     predicate: "m && m.risk && q && q.state==='active' && run.time > 1.5",
     criteria: 'Заявка риска: попап «⚡ РИСК ×2!» оранжевый над собакой, в правой HUD-панели строка «Риск ⚡⚡·» (один фокус потрачен).',
   },
+  // ---- S1 «Game Feel» (in-run) ----
+  {
+    name: '28-micro-delta', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.popups.some(p => p.small)",
+    criteria: 'Микро-дельта тайминга (S1.11): под крупной оценкой «ИДЕАЛЬНО!» мелкая голубоватая строка вида «+12 мс» / «−8 мс» — учит сдвигать нажатие.',
+  },
+  {
+    name: '29-live-delta-ghost', mode: 'career', cls: 'novice', stage: 1, testDrive: true,
+    predicate: "run.ghost && run.marks.some(x=>x.resolved) && run.popups.some(p => !p.small && (p.color==='#69f0ae'||p.color==='#ff8a8a') && String(p.text).includes('с'))",
+    criteria: 'Live-дельта против призрака (S1.4): рядом с собакой всплывает «−0.4с» зелёным (впереди Эйвы) или «+0.7с» красным (позади) — драма по каждому снаряду.',
+  },
+  {
+    name: '30-trainer-medal', mode: 'career', cls: 'novice', stage: 1,
+    predicate: 'false', thenFinishT: 3.4,
+    criteria: 'Протокол с медалью Тренера (S1.6): под строкой очков строка «🏅 Медаль Тренера!» или «🥇 Золото времени · до Тренера N.Nс» — цель для re-run.',
+  },
 ];
 
 const manifest = [];
@@ -231,7 +248,7 @@ for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
     mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
-    riskFirst: sc.riskFirst,
+    riskFirst: sc.riskFirst, testDrive: sc.testDrive,
   })})`);
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)
@@ -282,6 +299,28 @@ const SCREENS = [
       A.app.state = 'menu';
     })()`,
     criteria: 'Меню на босс-этапе: заголовок «КАРЬЕРА · Двор · 👻 БОСС: Эйва», на карте карьеры после 5 кружков пульсирует 👻; строка дара выбранной породы над «ENTER — на старт».',
+  },
+  // ---- S1 «Game Feel» ----
+  {
+    name: '26-shop-freeze',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.meta.bones = 640;
+      A.meta.streak.freezes = 1;
+      A.app.breedIdx = 3;
+      A.app.state = 'shop';
+    })()`,
+    criteria: 'Магазин: под строкой баланса — голубая плашка «🧊 Заначка стрика 1/2 — 200🦴» (S1.5), ниже сетка косметики без наложения.',
+  },
+  {
+    name: '27-settings-haptics',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.state = 'settings';
+    })()`,
+    criteria: 'Настройки: тумблеры Тряска/Колорблайнд/Вибрация (тач), слайдеры Музыка/Звуки, кнопки Калибровка/Тренировка — всё в панели без наложения.',
   },
 ];
 for (const sc of SCREENS) {

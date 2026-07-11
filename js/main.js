@@ -1,6 +1,6 @@
 // Точка входа: меню → забег → результаты. Input, HUD, игровой цикл.
 import { generateCourse, CLASSES } from './course.js';
-import { BREEDS, finalScore, nextClass, CLASS_ORDER } from './scoring.js';
+import { BREEDS, finalScore, nextClass, CLASS_ORDER, medalTimes, timeMedal } from './scoring.js';
 import { AudioEngine } from './audio.js';
 import { Particles } from './particles.js';
 import { Renderer } from './render.js';
@@ -14,6 +14,8 @@ import { loadMeta, saveMeta, earnFromRun, earnXp, rosettesForLevels, dogState,
 import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip } from './cosmetics.js';
 import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
 import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
+import { setHapticsEnabled } from './haptics.js';
+import { updateCalibration } from './calibrate.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -37,6 +39,7 @@ const fx = new Particles();
 const STAGES = 5; // трасс в каждом классе карьеры
 // Тест-драйв V4: ?test=v4 — одна трасса со всеми новыми механиками, без прогрессии
 const TEST_DRIVE = new URLSearchParams(location.search).has('test');
+const FREEZE_MAX = 2, FREEZE_COST = 200; // заначка стрика (S1.5)
 
 const app = {
   state: 'menu',           // menu | run | results | board
@@ -157,14 +160,15 @@ const toasts = []; // {icon, name, desc, t}
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
 // Настройки (доступность и громкости)
 const settings = (() => {
-  try { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6,
-    ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
-  catch { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6 }; }
+  const defs = { shake: true, colorblind: false, music: 0.6, sfx: 0.6, haptics: true };
+  try { return { ...defs, ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
+  catch { return { ...defs }; }
 })();
 function saveSettings() {
   try { localStorage.setItem('agility_settings', JSON.stringify(settings)); } catch {}
   renderer.shakeScale = settings.shake ? 1 : 0;
   renderer.colorblind = settings.colorblind;
+  setHapticsEnabled(settings.haptics !== false);
   if (audio.music) audio.music.bus.gain.value = 0.3 * settings.music / 0.6;
   if (audio.master && !audio.muted) audio.master.gain.value = 0.55 * settings.sfx / 0.6;
 }
@@ -523,6 +527,9 @@ function menuClick(x, y) {
 }
 
 function resultsKey(code) {
+  // Мгновенный рестарт (S1.1): R перезапускает сразу, даже во время секвенции —
+  // не нужно сперва скипать протокол. Спидран-цикл без трения.
+  if (code === 'KeyR') return startRun();
   // Первый инпут во время секвенции = скип к финальному состоянию протокола
   if (app.run && app.run.finishT < 3.4 && code !== 'Escape') {
     app.run.finishT = 3.4;
@@ -1004,6 +1011,20 @@ function drawShop() {
   ctx.fillStyle = '#ffe9a8';
   ctx.fillText(`Баланс: 🦴 ${meta.bones} · 🏵️ ${meta.rosettes}   ·   тап: купить / надеть / снять`, w / 2, py + 58 * z);
 
+  // Заначка стрика (S1.5): защищает серию трассы дня при пропуске, макс 2
+  const frz = meta.streak.freezes || 0;
+  const frzMax = frz >= FREEZE_MAX;
+  const ft = `🧊 Заначка стрика ${frz}/${FREEZE_MAX}${frzMax ? '' : ` — ${FREEZE_COST}🦴`}`;
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  const ftw = ctx.measureText(ft).width;
+  const fzx = w / 2 - ftw / 2 - 10 * z, fzy = py + 70 * z;
+  ctx.fillStyle = frzMax ? 'rgba(120,180,255,0.15)' : 'rgba(120,180,255,0.22)';
+  ctx.strokeStyle = '#7fbfff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(fzx, fzy - 13 * z, ftw + 20 * z, 22 * z, 8 * z); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#cfe4ff'; ctx.textAlign = 'center';
+  ctx.fillText(ft, w / 2, fzy + 1 * z);
+  app.freezeBuyZone = frzMax ? null : { x: fzx, y: fzy - 13 * z, w: ftw + 20 * z, h: 22 * z };
+
   const dnum = (new Date().getFullYear()) * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate();
   const showcase = dailyShowcase(dnum);
   const cols = isPortrait() ? 2 : 4;
@@ -1020,7 +1041,7 @@ function drawShop() {
     .sort((a, b) => (slotOrder[a.slot] ?? 9) - (slotOrder[b.slot] ?? 9));
   visibleItems.forEach((it, i) => {
     const col = i % cols, row = Math.floor(i / cols);
-    const x = px + 16 * z + col * cw, y = py + 76 * z + row * (chh + 6 * z);
+    const x = px + 16 * z + col * cw, y = py + 98 * z + row * (chh + 6 * z);
     if (y + chh > py + ph - 40 * z) return;
     const owned = !!meta.owned[it.id];
     const equipped = owned && equip[it.slot] === it.id;
@@ -1055,6 +1076,22 @@ function drawShop() {
 }
 
 function handleShopTap(p) {
+  // Покупка заначки стрика
+  const fz = app.freezeBuyZone;
+  if (fz && p.x >= fz.x && p.x <= fz.x + fz.w && p.y >= fz.y && p.y <= fz.y + fz.h) {
+    if ((meta.streak.freezes || 0) >= FREEZE_MAX) return true;
+    if (meta.bones >= FREEZE_COST) {
+      meta.bones -= FREEZE_COST;
+      meta.streak.freezes = (meta.streak.freezes || 0) + 1;
+      saveMeta(meta);
+      toasts.push({ icon: '🧊', name: 'Заначка куплена!', desc: 'Спасёт стрик при пропуске дня', t: 0 });
+      audio.good();
+    } else {
+      toasts.push({ icon: '🦴', name: 'Не хватает косточек', desc: `Нужно ${FREEZE_COST}`, t: 0 });
+      audio.miss();
+    }
+    return true;
+  }
   for (const c of app.shopCells || []) {
     if (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h) {
       const it = itemById(c.id);
@@ -1164,12 +1201,13 @@ function drawQuests() {
 function settingsRows(px, py, pw, z) {
   const offMs = Math.round((settings.audioOffset || 0) * 1000);
   const rows = [
-    { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
-    { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
-    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 205 * z },
-    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 260 * z },
-    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 320 * z },
-    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 368 * z },
+    { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 82 * z },
+    { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 126 * z },
+    { id: 'haptics', name: 'Вибрация (тач)', kind: 'toggle', y: py + 170 * z },
+    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 224 * z },
+    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 274 * z },
+    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 328 * z },
+    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 372 * z },
   ];
   if (meta.ngplusUnlocked) {
     rows.push({ id: 'ngplus', name: '👑 NG+ · окна реакции ×0.85', kind: 'toggle', y: py + 416 * z });
@@ -1720,6 +1758,14 @@ function drawApproachHint(ctx, type, cx, cy, z) {
   ctx.restore();
 }
 
+// Цветовая грамматика телеграфов (S1.10) — единый язык через все снаряды:
+//   жёлтый  #ffd54a — «держи/отпускай здесь» (perfect-кольцо, зона hold-release,
+//                     сектор заряда, счёт стола) и идеальный тайминг;
+//   зелёная #69f0ae — good-окно и сигнал действия GO (традиция светофора: «жми»);
+//   голубой #8fd8ff/#4fc3f7 — «тапай» (апекс шины, прогресс заряда, шкала контакта);
+//   красный #ff6b6b/#ff8a8a — «не то / жди / промах» (обманка «?», отставание, miss).
+// Аудит V5: грамматика уже консистентна; единственное осознанное исключение —
+// GO зелёный, а не голубой, ради узнаваемости «зелёный = действуй».
 function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
@@ -2286,6 +2332,15 @@ function wrapText(ctx, text, x, y, maxW, lh, maxLines = 99) {
 function drawResults(run, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   if (!app.result) {
+    // Тихая автокалибровка: усваиваем дельты хитов слалома этого прогона
+    if (run._calibSamples && run._calibSamples.length) {
+      const st = updateCalibration(
+        { offset: settings.audioOffset || 0, hits: settings.calibHits || [] },
+        run._calibSamples);
+      settings.audioOffset = st.offset;
+      settings.calibHits = st.hits;
+      saveSettings();
+    }
     app.result = finalScore({
       time: run.time, sct: run.sct, faults: run.score.faults,
       perfects: run.score.perfects, total: run.marks.length, maxCombo: run.score.maxCombo,
@@ -2353,6 +2408,12 @@ function drawResults(run, z) {
         isDaily: app.mode === 'daily', todayStr: todayStr(),
         runOfDay: meta.counters.runsToday.n,
       });
+      // Заначка сработала молча — сообщаем постфактум (Duolingo-паттерн)
+      const frzUsed = earned.detail.find(d => d[0] === 'freezeUsed');
+      if (frzUsed) {
+        earned.detail = earned.detail.filter(d => d[0] !== 'freezeUsed');
+        toasts.push({ icon: '🧊', name: 'Заначка спасла стрик!', desc: `Покрыт пропуск (${frzUsed[1]} дн.)`, t: 0 });
+      }
       // Per-dog медали: золото копится на собаку (для будущих титульных ачивок)
       if (res0.stars >= 3) {
         meta.counters.goldByBreed = meta.counters.goldByBreed || {};
@@ -2460,6 +2521,22 @@ function drawResults(run, z) {
     ctx.fillText(fn(), w / 2, py + (185 + i * 38) * z);
     ctx.globalAlpha = 1;
   });
+
+  // Медаль Тренера (S1.6): время против часов, мотиватор re-run.
+  // В босс-дуэли эту строку заменяет вердикт против призрака (ниже) — не дублируем.
+  if (ft > 2.5 && res.qualified && !run.ghost) {
+    const mt = medalTimes(run.sct);
+    const tier = timeMedal(run.time, run.sct);
+    const dAuthor = run.time - mt.author;
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = tier === 'author' ? '#ffd54a' : '#cfe4ff';
+    const label = { author: '', gold: '🥇 Золото времени',
+      silver: '🥈 Серебро времени', bronze: '🥉 Бронза времени' }[tier] || '';
+    const msg = tier === 'author'
+      ? `🏅 Медаль Тренера! (${mt.author.toFixed(1)}с)`
+      : `${label} · до Тренера ${dAuthor > 0 ? dAuthor.toFixed(1) + 'с' : '—'}`;
+    ctx.fillText(msg, w / 2, py + 320 * z);
+  }
 
   // Босс-дуэль: вердикт против призрака
   if (run.ghost && ft > 3.1) {

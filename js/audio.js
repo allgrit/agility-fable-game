@@ -128,6 +128,25 @@ export class AudioEngine {
     this._osc('triangle', 800 + (i % 2) * 220, this.ctx.currentTime, 0.07, 0.15);
   }
 
+  // Хитсаунд слалома в момент нажатия (osu!-принцип: звук триггерит игрок).
+  // Питч-лесенка: perfect идёт вверх по пентатонике D — «доигрываешь гамму»;
+  // good приглушён, miss — диссонанс ниже (слышно, что рвёт ритм).
+  grooveHit(grade, pitchIdx = 0) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const PENTA = [293.7, 329.6, 370, 440, 493.9, 587.3, 659.3, 740];
+    if (grade === 'perfect') {
+      const f = PENTA[Math.min(pitchIdx, PENTA.length - 1)] * 2;
+      this._osc('triangle', f, t, 0.12, 0.16);
+      this._osc('sine', f * 1.5, t + 0.005, 0.09, 0.07);
+    } else if (grade === 'good') {
+      this._osc('triangle', PENTA[0] * 2, t, 0.09, 0.10);
+    } else {
+      // Диссонанс: тритон вниз
+      this._osc('sawtooth', 220, t, 0.14, 0.10, null, 155);
+    }
+  }
+
   // ---- V4 ----
   // Метроном groove: тик планируется точно в WebAudio-времени (delay сек вперёд),
   // высота чередуется по стороне удара — слышно «лево-право».

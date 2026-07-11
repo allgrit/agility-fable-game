@@ -471,6 +471,11 @@ export class Renderer {
       const sq = Math.sin(dog.landT * Math.PI) * 0.24;
       ctx.scale(1 + sq, 1 - sq);
     }
+    // Perfect-«поп»: быстрый вертикальный вытяг с пружинным откатом (squash&stretch)
+    if (dog.popT > 0) {
+      const s = Math.sin(dog.popT * Math.PI) * 0.15;
+      ctx.scale(1 - s * 0.6, 1 + s);
+    }
     // Дрожь в стойке перед стартом
     if (dog.tremble) ctx.translate(Math.sin(this.time * 40) * 0.8, 0);
 

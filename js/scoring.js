@@ -66,6 +66,28 @@ export function finalScore({ time, sct, faults, perfects, total, maxCombo, bonus
   return { timeFaults: tf, totalFaults, clean, qualified, stars, title, points };
 }
 
+// Медальные времена против часов (Trackmania author medal). Тренер бежит ~60%
+// SCT (замер автопилота: sctSpeed/dogSpeed ≈ 0.6 по всем классам), bronze — просто
+// уложиться. gold/silver интерполируются — гарантированно монотонны и ≤ SCT.
+export function medalTimes(sct) {
+  const author = sct * 0.60;
+  const bronze = sct * 0.98;
+  const gold = author + (bronze - author) * 0.33;
+  const silver = author + (bronze - author) * 0.66;
+  return { author: +author.toFixed(2), gold: +gold.toFixed(2),
+           silver: +silver.toFixed(2), bronze: +bronze.toFixed(2) };
+}
+
+// Какой временной тир взят (author > gold > silver > bronze > none)
+export function timeMedal(time, sct) {
+  const m = medalTimes(sct);
+  if (time <= m.author) return 'author';
+  if (time <= m.gold) return 'gold';
+  if (time <= m.silver) return 'silver';
+  if (time <= m.bronze) return 'bronze';
+  return null;
+}
+
 export const CLASS_ORDER = ['novice', 'open', 'excellent', 'masters'];
 
 export function nextClass(cls) {

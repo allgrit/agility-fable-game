@@ -2,6 +2,7 @@
 import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
 import { computeSct, BREEDS } from './scoring.js';
+import { haptic } from './haptics.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
@@ -159,6 +160,7 @@ export class Run {
     if (this.hintSlow > 0) { this.hintSlow -= rawDt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
     if (this.slowmoT > 0) { this.slowmoT -= rawDt; dt *= 0.5; }
     if (this.desatT > 0) this.desatT -= dt;
+    if (this.flashT > 0) this.flashT -= rawDt;
     this.time += this.phase === 'running' ? dt : 0;
     this.audio.music?.speedFilter(this.dog.speed);
 
@@ -331,6 +333,7 @@ export class Run {
     if (d.dist >= this.path.length - 0.2) {
       this.phase = 'finished';
       d.happy = true;
+      haptic('finish');
       this.audio.crowdLevel(0.9);
       const clean = this.score.faults === 0;
       this.audio.music?.setState(clean || this.score.faults <= 5 ? 'results_win' : 'results_fail');
@@ -366,7 +369,18 @@ export class Run {
           this.emit({ type: 'command', text: e.text, obstacle: m.o });
           break;
         case 'beat':
-          if (e.grade !== 'miss') { this.audio.weaveTick(e.i); m.state.wobble = e.i * 2; }
+          if (e.grade !== 'miss') {
+            m.state.wobble = e.i * 2;
+            // Питч-лесенка: perfect играет ноту вверх по пентатонике (osu!-хитсаунд
+            // в момент нажатия). good — приглушённо, промах — диссонанс ниже.
+            this.audio.grooveHit(e.grade, e.pitch || 0);
+          } else {
+            this.audio.grooveHit('miss', 0);
+          }
+          // Автокалибровка: копим знаковые дельты хитов слалома
+          if (e.delta != null) this._calibSamples = (this._calibSamples || []).concat(e.delta);
+          // Микро-дельта под HUD (S1.11): последняя дельта в мс
+          if (e.delta != null) this.lastHitDelta = Math.round(e.delta * 1000);
           break;
         case 'tip':
           this.audio.creak();
@@ -427,6 +441,12 @@ export class Run {
           this.bonusPoints += gb;
           this.popups.push({ text: `+${gb}`, color: '#ffd54a', x: this.dog.x + 1.4, y: this.dog.y - 2.2, t: 0 });
           this.fx.confettiBurst(this.dog.x, this.dog.y, 80, 'golden');
+          // Кульминация: длинный фриз + вспышка + slow-mo (пропорционально событию)
+          this.hitstop = 0.15;
+          this.slowmoT = 0.3;
+          this.flashT = 0.35;
+          this.r.zoomPunch();
+          haptic('golden');
           this.audio.fanfare();
           this.emit({ type: 'goldenWeave' });
           break;
@@ -467,6 +487,21 @@ export class Run {
     const gradeColor = { perfect: '#ffd54a', good: '#69f0ae', late: '#ffab6b', miss: '#ff6b6b' }[grade];
     // Выше собаки, чтобы не спорить с кольцом следующего QTE
     this.popups.push({ text: gradeText, color: gradeColor, x: d.x, y: d.y - 2.6, t: 0 });
+    // Микро-дельта тайминга (S1.11): учит игрока сдвигать нажатие
+    if (res.hitMs != null && grade !== 'miss') {
+      const sign = res.hitMs >= 0 ? '+' : '';
+      this.popups.push({ text: `${sign}${res.hitMs} мс`, color: '#9fb4c8',
+        x: d.x, y: d.y - 1.5, t: 0, small: true });
+    }
+    // Live-дельта против призрака (S1.4): на каждом снаряде — насколько мы
+    // впереди/позади темпа призрака. Зелёный = отыгрываем, красный = теряем.
+    if (this.ghost && this.ghost.time > 0) {
+      const ghostReach = (m.entryD / this.path.length) * this.ghost.time;
+      const lead = ghostReach - this.time; // >0 = мы быстрее призрака к этой точке
+      const txt = `${lead >= 0 ? '−' : '+'}${Math.abs(lead).toFixed(1)}с`;
+      this.popups.push({ text: txt, color: lead >= 0 ? '#69f0ae' : '#ff8a8a',
+        x: d.x + 1.6, y: d.y - 3.2, t: 0 });
+    }
 
     const hadCombo = this.score.combo >= 3;
     if (grade === 'perfect') {
@@ -475,6 +510,8 @@ export class Run {
       this.score.maxCombo = Math.max(this.score.maxCombo, Math.floor(this.score.combo));
       this.boost = 1.4;
       this.hitstop = 0.09;
+      d.popT = 1;            // squash&stretch пружина на perfect
+      haptic('perfect');
       this.audio.perfect();
       this.audio.music?.duck(0.3, 0.1);
       this.fx.sparks(d.x, d.y, '#ffd54a');
@@ -522,6 +559,7 @@ export class Run {
       this.score.faults += faults;
       this.slowT = 0.6;
       if (hadCombo) { this.desatT = 0.55; this.audio.music?.dip(); }
+      haptic('fault');
       this.audio.miss();
       this.audio.gasp();
       this.audio.crowdLevel(0.15);
@@ -607,6 +645,7 @@ export class Run {
       this.r.kick(0, 3);
     }
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
+    if (d.popT > 0) d.popT = Math.max(0, d.popT - dt * 5); // ~0.2с пружина perfect
 
     // След лап на земле + trail-позиции для комбо-шлейфа
     this._pawAcc = (this._pawAcc || 0) + d.speed * dt;
@@ -871,6 +910,15 @@ export class Run {
       ctx.restore();
     }
 
+    // Белая вспышка кульминации (Golden Weave)
+    if (this.flashT > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,250,220,${Math.min(0.6, this.flashT * 1.6)})`;
+      ctx.fillRect(0, 0, r.canvas.width, r.canvas.height);
+      ctx.restore();
+    }
+
     // Подсказка финишного спурта
     if (this.sprint.active && this.phase === 'running') {
       ctx.save();
@@ -892,7 +940,9 @@ export class Run {
       const pop = p.t < 0.18 ? 0.5 + (p.t / 0.18) * 0.75 : 1.25 - Math.min(0.25, (p.t - 0.18) * 1.4);
       ctx.save();
       ctx.globalAlpha = Math.max(0, 1 - p.t * 0.9);
-      ctx.font = `900 ${Math.round(r.cam.zoom * (0.62 - p.t * 0.1) * pop)}px "Segoe UI", sans-serif`;
+      // small — микро-дельта тайминга: вдвое мельче основной оценки
+      const fscale = p.small ? 0.3 : 0.62;
+      ctx.font = `900 ${Math.round(r.cam.zoom * (fscale - p.t * 0.1) * pop)}px "Segoe UI", sans-serif`;
       ctx.textAlign = 'center';
       ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.strokeText(p.text, s.x, s.y);

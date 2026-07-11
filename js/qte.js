@@ -111,6 +111,7 @@ export class Qte {
       this.perfectStreak = 0;
       this.missCount = 0;      // промахи текущего прохода; 3 = возврат на 1-ю стойку
       this.restarts = 0;
+      this._lastMissBeat = null; // для стресс-окна после промаха
     }
     if (d.kind === 'freeze') {
       this.fakePauses = opts.fakePauses || []; // [{at, dur}] по сырому времени счёта
@@ -134,7 +135,9 @@ export class Qte {
   _finish(grade, faults, label) {
     if (this.state === 'done') return;
     this.state = 'done';
-    this.result = { grade, faults, label, score: GRADE_SCORE[grade] ?? 0 };
+    // hitMs — знаковая дельта тайминга в мс (для микро-подсказки S1.11), если известна
+    const hitMs = this._hitDelta != null ? Math.round(this._hitDelta * 1000) : null;
+    this.result = { grade, faults, label, score: GRADE_SCORE[grade] ?? 0, hitMs };
     this._emit('result', this.result);
   }
 
@@ -261,7 +264,7 @@ export class Qte {
       }
       case 'groove': {
         if (this.nextBeatT === null) this.nextBeatT = this.target;
-        while (this.beatIdx < d.beats && t > this.nextBeatT + this.gw.o) {
+        while (this.beatIdx < d.beats && t > this.nextBeatT + this.gw.o * this._grooveLeeway()) {
           this._grooveBeat('miss', t);
           if (this.state === 'done') break;
         }
@@ -278,13 +281,17 @@ export class Qte {
     switch (d.kind) {
       case 'press': {
         if (key !== d.key) { this._finish('miss', 5, wrongLabel(this.type)); break; }
-        // Прощение одного раннего нажатия: собака «ещё не готова», без фолта.
-        if (t < this.target - w && !this.earlyUsed) {
-          this.earlyUsed = true;
-          this._emit('early');
+        // Раннее нажатие до окна: первое прощаем («собака ещё не готова»),
+        // каждое следующее — анти-спам: сжимаем окно на 25% (Sekiro), не фейлим.
+        // Убирает доминирующую стратегию «тапать заранее» на обманках.
+        if (t < this.target - this.w) {
+          if (!this.earlyUsed) { this.earlyUsed = true; this._emit('early'); break; }
+          this.w = Math.max(this.w * 0.75, this.def.window * 0.3);
+          this._emit('early', { penalized: true });
           break;
         }
-        const g = gradeFromDelta(t - this.target, w);
+        this._hitDelta = t - this.target;
+        const g = gradeFromDelta(t - this.target, this.w);
         this._finish(g, g === 'miss' ? 5 : 0, g === 'miss' ? wrongLabel(this.type) : null);
         break;
       }
@@ -410,13 +417,15 @@ export class Qte {
         const expect = d.keys[this.beatIdx % 2];
         // Калибровка: игрок жмёт на audioOffset позже реального бита — вычитаем
         const delta = (t - this.nextBeatT) - this.audioOffset;
+        const lee = this._grooveLeeway();  // стресс-окно: шире на первых битах и после промаха
         let g;
         if (key !== expect) g = 'miss';
         else {
           const a = Math.abs(delta);
-          g = a <= this.gw.p ? 'perfect' : a <= this.gw.g ? 'good' : a <= this.gw.o ? 'late' : 'miss';
+          g = a <= this.gw.p * lee ? 'perfect' : a <= this.gw.g * lee ? 'good'
+            : a <= this.gw.o * lee ? 'late' : 'miss';
         }
-        this._grooveBeat(g, t);
+        this._grooveBeat(g, t, g === 'miss' ? null : delta);
         if (this.state !== 'done' && this.beatIdx >= d.beats) this._finishGroove();
         break;
       }
@@ -476,10 +485,22 @@ export class Qte {
     this._finish(avg >= 2.6 ? 'perfect' : avg >= 1.8 ? 'good' : 'late', 0, null);
   }
 
+  // Скрытое расширение окна: на первых 2 битах и сразу после промаха игрок
+  // напряжён и наименее точен (NecroDancer) — окно шире, чтобы не карать в стрессе.
+  _grooveLeeway() {
+    if (this.beatIdx < 2) return 1.4;
+    if (this._lastMissBeat != null && this.beatIdx - this._lastMissBeat <= 1) return 1.35;
+    return 1;
+  }
+
   // Обработка одного бита groove: грейд, серии, разгон BPM, возврат при 3 промахах.
-  _grooveBeat(g, t) {
+  // delta — знаковое смещение хита от бита (для автокалибровки); null для таймаута.
+  _grooveBeat(g, t, delta = null) {
     this.beatGrades.push(g);
-    this._emit('beat', { i: this.beatIdx, grade: g });
+    // perfectRun — сколько perfect подряд для питч-лесенки (не сбрасывается разгоном)
+    if (g === 'perfect') this._pitchIdx = (this._pitchIdx || 0) + 1;
+    else this._pitchIdx = 0;
+    this._emit('beat', { i: this.beatIdx, grade: g, delta, pitch: this._pitchIdx });
     this.beatIdx++;
     if (g === 'perfect') {
       this.perfectStreak++;
@@ -492,6 +513,7 @@ export class Qte {
       this.perfectStreak = 0;
     }
     if (g === 'miss') {
+      this._lastMissBeat = this.beatIdx; // beatIdx уже инкрементнут — след. бит получит leeway
       this.missCount++;
       if (this.missCount >= 3) {
         // Возврат на 1-ю стойку: время идёт, фолтов нет — наказание темпом.
@@ -502,6 +524,7 @@ export class Qte {
         this.beatGrades = [];
         this.missCount = 0;
         this.perfectStreak = 0;
+        this._lastMissBeat = null;
         this.restarts++;
         this.nextBeatT = t + this.beat * 2;
         this._emit('restart', { n: this.restarts });
