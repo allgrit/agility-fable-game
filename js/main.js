@@ -625,7 +625,7 @@ function startRun() {
     // (хитсаунды/питч-лесенка/стресс-окно), финиш (медаль Тренера); призрак Эйва
     // даёт live-дельту. Excellent-класс включает обманки «?» для анти-спама.
     course = generateCourse(707, 'excellent', { forceTypes: [
-      'jump', 'weave', 'jump', 'tire', 'jump', 'tunnel', 'jump',
+      'jump', 'weave', 'aframe', 'tire', 'jump', 'tunnel', 'jump',
     ] });
     course.name = '✨ Демо S1 · Game Feel';
   } else if (app.testDrive) {
