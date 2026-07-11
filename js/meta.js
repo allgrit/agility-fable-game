@@ -16,7 +16,7 @@ function defaults() {
     dogs: {},          // breedId → { xp, level, equip: {coat,neck,paws,finish} }
     owned: {},         // itemId → 1
     counters: { runs: 0, cleans: 0, perfectRuns: 0 },
-    streak: { count: 0, last: '' },   // трасса дня: дней подряд, дата последнего
+    streak: { count: 0, last: '', freezes: 0 },   // серия дней подряд, дата, заначки
     quests: { day: '', week: '', daily: [], weekly: [] }, // прогресс заданий
     bosses: {},        // cls → 1: побеждённые боссы-призраки (карьера 2.0)
     ngplusUnlocked: 0, // гранд-финал пройден — открыт NG+ (окна ×0.85)
@@ -77,13 +77,25 @@ export function earnFromRun(meta, { points, stars, trackId, isDaily, todayStr, r
     detail.push(['первое прохождение', 30]);
   }
 
-  // Streak трассы дня: заход сегодня продлевает серию; пропуск дня снимает ступень
+  // Streak трассы дня: заход сегодня продлевает серию; пропуск дня снимает ступень.
+  // «Заначка» (streak freeze, Duolingo): пропущенные дни молча гасятся заначками —
+  // серия сохраняется, а не халвится. Игрок узнаёт постфактум (freezeUsed).
   if (isDaily && meta.streak.last !== todayStr) {
     const last = meta.streak.last;
     const gap = last ? daysBetween(last, todayStr) : 99;
     if (gap === 1) meta.streak.count += 1;
-    else if (gap > 1) meta.streak.count = Math.max(1, Math.floor(meta.streak.count / 2));
-    else meta.streak.count = Math.max(1, meta.streak.count);
+    else if (gap > 1) {
+      const missed = gap - 1;
+      const avail = meta.streak.freezes || 0;
+      if (last && missed <= avail) {
+        meta.streak.freezes = avail - missed;
+        meta.streak.count += 1;         // серия продолжается как будто без пропуска
+        detail.push(['freezeUsed', missed]);
+      } else {
+        meta.streak.freezes = 0;        // остаток заначек сгорает вместе с серией
+        meta.streak.count = Math.max(1, Math.floor(meta.streak.count / 2));
+      }
+    } else meta.streak.count = Math.max(1, meta.streak.count);
     if (!last || gap >= 1) meta.streak.last = todayStr;
     if (meta.streak.count === 0) meta.streak.count = 1;
   }

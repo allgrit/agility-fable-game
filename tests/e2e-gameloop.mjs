@@ -318,6 +318,26 @@ console.log('# ЦИКЛ 8: Все экраны доступны игроку с 
   check('трофеи/магазин/задания/настройки открываются и закрываются', r.allOk, JSON.stringify(r.states));
 }
 
+// ============================================================
+console.log('# ЦИКЛ 9: S1 Game Feel — мгновенный рестарт из середины протокола');
+{
+  const r = await page.evaluate(`(async () => {
+    const A = window.__agility;
+    A.setMode('career'); A.app.cls = 'novice'; A.app.stage = 1;
+    await ${PLAY}({});
+    // Прогон завершён, идёт секвенция протокола (finishT растёт). Жмём R.
+    A.app.state = 'results';
+    A.app.run.finishT = 1.0; // середина секвенции
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyR' }));
+    await new Promise(r => setTimeout(r, 120));
+    // Должны сразу оказаться в новом забеге (state run, phase countdown/running), не в протоколе
+    return { state: A.app.state, phase: A.app.run?.phase, freshTime: A.app.run?.time };
+  })()`);
+  check('R из середины протокола = мгновенный новый забег (S1.1)',
+    r.state === 'run' && (r.phase === 'countdown' || r.phase === 'running') && r.freshTime < 1,
+    JSON.stringify(r));
+}
+
 check('консоль без ошибок за все циклы', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 
 await browser.close();

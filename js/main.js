@@ -1,6 +1,6 @@
 // Точка входа: меню → забег → результаты. Input, HUD, игровой цикл.
 import { generateCourse, CLASSES } from './course.js';
-import { BREEDS, finalScore, nextClass, CLASS_ORDER } from './scoring.js';
+import { BREEDS, finalScore, nextClass, CLASS_ORDER, medalTimes, timeMedal } from './scoring.js';
 import { AudioEngine } from './audio.js';
 import { Particles } from './particles.js';
 import { Renderer } from './render.js';
@@ -14,6 +14,8 @@ import { loadMeta, saveMeta, earnFromRun, earnXp, rosettesForLevels, dogState,
 import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip } from './cosmetics.js';
 import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
 import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
+import { setHapticsEnabled } from './haptics.js';
+import { updateCalibration } from './calibrate.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -35,8 +37,10 @@ const audio = new AudioEngine();
 const fx = new Particles();
 
 const STAGES = 5; // трасс в каждом классе карьеры
-// Тест-драйв V4: ?test=v4 — одна трасса со всеми новыми механиками, без прогрессии
+// Тест-драйв: ?test=v4 — механики V4; ?test=s1 — демо новинок «Game Feel»
+const TEST_MODE = new URLSearchParams(location.search).get('test'); // 'v4' | 's1' | '' | null
 const TEST_DRIVE = new URLSearchParams(location.search).has('test');
+const FREEZE_MAX = 2, FREEZE_COST = 200; // заначка стрика (S1.5)
 
 const app = {
   state: 'menu',           // menu | run | results | board
@@ -157,14 +161,15 @@ const toasts = []; // {icon, name, desc, t}
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
 // Настройки (доступность и громкости)
 const settings = (() => {
-  try { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6,
-    ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
-  catch { return { shake: true, colorblind: false, music: 0.6, sfx: 0.6 }; }
+  const defs = { shake: true, colorblind: false, music: 0.6, sfx: 0.6, haptics: true };
+  try { return { ...defs, ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
+  catch { return { ...defs }; }
 })();
 function saveSettings() {
   try { localStorage.setItem('agility_settings', JSON.stringify(settings)); } catch {}
   renderer.shakeScale = settings.shake ? 1 : 0;
   renderer.colorblind = settings.colorblind;
+  setHapticsEnabled(settings.haptics !== false);
   if (audio.music) audio.music.bus.gain.value = 0.3 * settings.music / 0.6;
   if (audio.master && !audio.muted) audio.master.gain.value = 0.55 * settings.sfx / 0.6;
 }
@@ -523,6 +528,9 @@ function menuClick(x, y) {
 }
 
 function resultsKey(code) {
+  // Мгновенный рестарт (S1.1): R перезапускает сразу, даже во время секвенции —
+  // не нужно сперва скипать протокол. Спидран-цикл без трения.
+  if (code === 'KeyR') return startRun();
   // Первый инпут во время секвенции = скип к финальному состоянию протокола
   if (app.run && app.run.finishT < 3.4 && code !== 'Escape') {
     app.run.finishT = 3.4;
@@ -611,6 +619,15 @@ function startRun() {
   } else if (app.mode === 'daily') {
     course = generateCourse(todayNum() * 13 + 7, dailyCls());
     course.name = `Трасса дня ${todayStr()}`;
+  } else if (app.testDrive && TEST_MODE === 's1') {
+    // Демо S1 «Game Feel» (?test=s1): короткая трасса, заточенная под новинки —
+    // прыжки (hitstop/squash/микро-дельта/анти-спам обманок), groove-слалом
+    // (хитсаунды/питч-лесенка/стресс-окно), финиш (медаль Тренера); призрак Эйва
+    // даёт live-дельту. Excellent-класс включает обманки «?» для анти-спама.
+    course = generateCourse(707, 'excellent', { forceTypes: [
+      'jump', 'weave', 'aframe', 'tire', 'jump', 'tunnel', 'jump',
+    ] });
+    course.name = '✨ Демо S1 · Game Feel';
   } else if (app.testDrive) {
     // Тест-драйв V4 (?test=v4): все новые механики на одной трассе по порядку —
     // шина double-tap, чарж, серпантин, groove-слалом, стол «Замри», тройной
@@ -645,7 +662,11 @@ function startRun() {
   if (app.testDrive) {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
     app.run.ghost = { name: 'Эйва', k: 1.05, time: app.run.sct * 1.05, look: 'aussie' };
-    app.run.startLine = 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
+    app.run.startLine = TEST_MODE === 's1'
+      ? 'Демо Game Feel! Слушай слалом, лови ×2 риск, смотри дельту призрака.'
+      : 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
+    // Демо S1: ровно одна настоящая обманка (на 5-м снаряде) — показать механику
+    if (TEST_MODE === 's1') app.run.demoDecoyOnce = 4;
   } else if (isBossStage() || app.bossChallenge) {
     const bcls = app.bossChallenge || app.cls;
     const boss = bossFor(bcls);
@@ -823,6 +844,30 @@ function drawHud(run) {
   const m = run.activeMark;
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running') drawQte(run, m, z);
 
+  // Подсказка риска (S1): пока можно заявить (окно ещё не открыто, есть фокус) —
+  // мигающая плашка «SHIFT / тап по хендлеру = риск ×2». SHIFT неочевиден без неё.
+  if (m && m.qte && m.qte.state === 'active' && run.phase === 'running'
+      && run.focus?.count > 0 && !m.risk
+      && (m.qte.def.kind === 'press' || m.qte.def.kind === 'doubleTap')
+      && !(m.decoys && !m.decoys.revealed)) {
+    const tq = run.time - m.qteStart;
+    if (tq < m.qte.target - m.qte.w) {
+      ctx.save();
+      ctx.textAlign = 'center';
+      const blink = Math.sin(run.time * 6) > -0.2;
+      const txt = IS_TOUCH ? '⚡ Тап по хендлеру — риск ×2' : '⚡ SHIFT — риск ×2';
+      ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+      const tw = ctx.measureText(txt).width;
+      const ry = IS_TOUCH ? h * 0.4 : h * 0.68;
+      ctx.globalAlpha = blink ? 1 : 0.5;
+      ctx.fillStyle = 'rgba(40,20,10,0.8)';
+      ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2 - 12 * z, ry - 15 * z, tw + 24 * z, 26 * z, 8 * z); ctx.fill();
+      ctx.fillStyle = '#ff8a65';
+      ctx.fillText(txt, w / 2, ry + 2 * z);
+      ctx.restore();
+    }
+  }
+
   // Реплика хендлера: на ритуале старта и сразу после финиша
   const line = run.phase === 'countdown' ? run.startLine
     : (run.phase === 'finished' && run.finishT < 2.6 ? run.finishLine : null);
@@ -856,7 +901,7 @@ function expectedKey(run) {
     return t >= beatT - (IS_TOUCH ? 1.0 : d.reveal) ? q.seq[q.beatIdx] : null;
   }
   if (d.kind === 'freeze') return q.stage === 1 ? null : d.key; // во время счёта НЕ жать
-  return d.key;
+  return q.pressKey || d.key; // настоящая обманка: подсвечиваем раскрытую клавишу
 }
 
 function drawTouchControls(run) {
@@ -1004,6 +1049,20 @@ function drawShop() {
   ctx.fillStyle = '#ffe9a8';
   ctx.fillText(`Баланс: 🦴 ${meta.bones} · 🏵️ ${meta.rosettes}   ·   тап: купить / надеть / снять`, w / 2, py + 58 * z);
 
+  // Заначка стрика (S1.5): защищает серию трассы дня при пропуске, макс 2
+  const frz = meta.streak.freezes || 0;
+  const frzMax = frz >= FREEZE_MAX;
+  const ft = `🧊 Заначка стрика ${frz}/${FREEZE_MAX}${frzMax ? '' : ` — ${FREEZE_COST}🦴`}`;
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  const ftw = ctx.measureText(ft).width;
+  const fzx = w / 2 - ftw / 2 - 10 * z, fzy = py + 70 * z;
+  ctx.fillStyle = frzMax ? 'rgba(120,180,255,0.15)' : 'rgba(120,180,255,0.22)';
+  ctx.strokeStyle = '#7fbfff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(fzx, fzy - 13 * z, ftw + 20 * z, 22 * z, 8 * z); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#cfe4ff'; ctx.textAlign = 'center';
+  ctx.fillText(ft, w / 2, fzy + 1 * z);
+  app.freezeBuyZone = frzMax ? null : { x: fzx, y: fzy - 13 * z, w: ftw + 20 * z, h: 22 * z };
+
   const dnum = (new Date().getFullYear()) * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate();
   const showcase = dailyShowcase(dnum);
   const cols = isPortrait() ? 2 : 4;
@@ -1020,7 +1079,7 @@ function drawShop() {
     .sort((a, b) => (slotOrder[a.slot] ?? 9) - (slotOrder[b.slot] ?? 9));
   visibleItems.forEach((it, i) => {
     const col = i % cols, row = Math.floor(i / cols);
-    const x = px + 16 * z + col * cw, y = py + 76 * z + row * (chh + 6 * z);
+    const x = px + 16 * z + col * cw, y = py + 98 * z + row * (chh + 6 * z);
     if (y + chh > py + ph - 40 * z) return;
     const owned = !!meta.owned[it.id];
     const equipped = owned && equip[it.slot] === it.id;
@@ -1055,6 +1114,22 @@ function drawShop() {
 }
 
 function handleShopTap(p) {
+  // Покупка заначки стрика
+  const fz = app.freezeBuyZone;
+  if (fz && p.x >= fz.x && p.x <= fz.x + fz.w && p.y >= fz.y && p.y <= fz.y + fz.h) {
+    if ((meta.streak.freezes || 0) >= FREEZE_MAX) return true;
+    if (meta.bones >= FREEZE_COST) {
+      meta.bones -= FREEZE_COST;
+      meta.streak.freezes = (meta.streak.freezes || 0) + 1;
+      saveMeta(meta);
+      toasts.push({ icon: '🧊', name: 'Заначка куплена!', desc: 'Спасёт стрик при пропуске дня', t: 0 });
+      audio.good();
+    } else {
+      toasts.push({ icon: '🦴', name: 'Не хватает косточек', desc: `Нужно ${FREEZE_COST}`, t: 0 });
+      audio.miss();
+    }
+    return true;
+  }
   for (const c of app.shopCells || []) {
     if (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h) {
       const it = itemById(c.id);
@@ -1164,12 +1239,13 @@ function drawQuests() {
 function settingsRows(px, py, pw, z) {
   const offMs = Math.round((settings.audioOffset || 0) * 1000);
   const rows = [
-    { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 90 * z },
-    { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 140 * z },
-    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 205 * z },
-    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 260 * z },
-    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 320 * z },
-    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 368 * z },
+    { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 82 * z },
+    { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 126 * z },
+    { id: 'haptics', name: 'Вибрация (тач)', kind: 'toggle', y: py + 170 * z },
+    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 224 * z },
+    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 274 * z },
+    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 328 * z },
+    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 372 * z },
   ];
   if (meta.ngplusUnlocked) {
     rows.push({ id: 'ngplus', name: '👑 NG+ · окна реакции ×0.85', kind: 'toggle', y: py + 416 * z });
@@ -1720,6 +1796,57 @@ function drawApproachHint(ctx, type, cx, cy, z) {
   ctx.restore();
 }
 
+// Легенда демо S1: на старте — панель «что пробовать», в беге — компактная строка.
+const DEMO_LINES = [
+  '👂 Слалом: слушай, как perfect идёт вверх по нотам',
+  '💥 Идеальный прыжок — собака «пружинит» + удар кадра',
+  '🔢 Под оценкой — дельта тайминга «+12 мс»',
+  '👻 Обгоняй Эйву: «−0.4с» зелёным = ты быстрее',
+  '⚡ SHIFT (тап по хендлеру) до прыжка — риск ×2',
+  '❓ Не тапай обманку заранее — окно сузится',
+  '🏅 На финише — медаль Тренера (цель по времени)',
+  '📳 На телефоне — вибрация; ⟳ R — мгновенный рестарт',
+];
+function drawDemoLegend(run, z) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  ctx.save();
+  ctx.textAlign = 'left';
+  if (run.phase === 'countdown') {
+    // Полная легенда поверх старта
+    const pw = Math.min(560 * z, w * 0.92), lh = 30 * z;
+    const ph = 70 * z + DEMO_LINES.length * lh;
+    const px = w / 2 - pw / 2, py = h * 0.5 - ph / 2;
+    ctx.fillStyle = 'rgba(8,16,12,0.9)';
+    ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14 * z); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffd54a'; ctx.textAlign = 'center';
+    ctx.font = `900 ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('✨ Демо «Game Feel» — новинки', w / 2, py + 34 * z);
+    ctx.textAlign = 'left';
+    ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#e8f5ec';
+    DEMO_LINES.forEach((s, i) => ctx.fillText(s, px + 24 * z, py + 66 * z + i * lh));
+  } else if (run.phase === 'running') {
+    // Компактная бегущая подсказка сверху
+    const i = Math.floor(run.time / 3.2) % DEMO_LINES.length;
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center';
+    const s = DEMO_LINES[i];
+    const tw = ctx.measureText(s).width;
+    ctx.fillStyle = 'rgba(8,16,12,0.72)';
+    ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2 - 12 * z, h * 0.135, tw + 24 * z, 24 * z, 8 * z); ctx.fill();
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(s, w / 2, h * 0.135 + 16 * z);
+  }
+  ctx.restore();
+}
+
+// Цветовая грамматика телеграфов (S1.10) — единый язык через все снаряды:
+//   жёлтый  #ffd54a — «держи/отпускай здесь» (perfect-кольцо, зона hold-release,
+//                     сектор заряда, счёт стола) и идеальный тайминг;
+//   зелёная #69f0ae — good-окно и сигнал GO (традиция светофора: «жми»);
+//   голубой #8fd8ff/#4fc3f7 — «тапай» (апекс шины, прогресс заряда, шкала контакта);
+//   красный #ff6b6b/#ff8a8a — «не то / жди / промах» (обманка «?», отставание, miss).
 function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
@@ -1812,16 +1939,27 @@ function drawQte(run, m, z) {
     keycap(ctx, cx, cy, 52 * z, KEY_LABEL[def.key2], '#ffd54a');
     ring(ctx, cx, cy, 52 * z + rem * 90 * z, '#ffd54a');
   } else if (m.decoys && !m.decoys.revealed) {
-    // PS-style обманка: три кандидата, настоящая кнопка раскроется позже
+    // Обманка до раскрытия: кандидаты крутятся, настоящая кнопка ещё не ясна.
+    // Красный «?» = «жди, не тапай» (цветовая грамматика).
     const step = 92 * z;
     const spin = Math.floor(run.time * 9) % m.decoys.options.length;
     m.decoys.options.forEach((k, i) => {
       keycap(ctx, cx + (i - 1) * step, cy, 42 * z * (i === spin ? 1.12 : 0.9), KEY_LABEL[k],
-        i === spin ? '#ffd54a' : 'rgba(255,255,255,0.45)');
+        i === spin ? '#ff8a65' : 'rgba(255,255,255,0.4)');
     });
-    ctx.fillStyle = '#ffd54a';
+    ctx.fillStyle = '#ff6b6b';
     ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('?', cx, cy - 62 * z);
+  } else if (m.decoys && m.decoys.revealed) {
+    // Обманка раскрыта: крупно бьём настоящую клавишу — реагируй! (и на таче
+    // подсветится соответствующая кнопка через expectedKey)
+    const need = q.pressKey || def.key;
+    const inGood = Math.abs(t - q.target) <= q.w * 0.6;
+    const pulse = 1 + Math.sin(run.time * 24) * 0.12;
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `900 ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('ЖМИ!', cx, cy - 60 * z);
+    keycap(ctx, cx, cy, 50 * z * pulse, KEY_LABEL[need], inGood ? '#ffd54a' : '#fff');
   } else if (def.kind === 'press') {
     // press: ГЛАВНЫЙ индикатор тайминга — кольцо вокруг собаки (game.js).
     // Здесь только «какую клавишу жать» (на таче это делает сама кнопка).
@@ -1829,7 +1967,7 @@ function drawQte(run, m, z) {
       const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
       const inGood = Math.abs(t - q.target) <= q.w * 0.6;
       const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
-      keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
+      keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[q.pressKey || def.key],
         inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
     }
   } else {
@@ -1979,18 +2117,26 @@ function drawMenu(dt) {
   grad.addColorStop(0, '#ffe082'); grad.addColorStop(1, '#ff9d47');
   ctx.fillStyle = grad;
   ctx.fillText('AGILITY TRIAL!', w / 2, h * 0.16);
-  ctx.font = `${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+  // Подзаголовок крупнее на мобайле (Codex: вторичный текст мелковат); на узком
+  // экране — короче, чтобы не переносился.
+  ctx.font = `${Math.round((isPortrait() ? 24 : 20) * z)}px "Segoe UI", sans-serif`;
   ctx.fillStyle = '#e0f2e9';
-  ctx.fillText('Ты — собака. Слушай хендлера и жми верные клавиши вовремя!', w / 2, h * 0.16 + 46 * z);
+  ctx.fillText(isPortrait() ? 'Ты — собака. Жми команды в такт!'
+    : 'Ты — собака. Слушай хендлера и жми верные клавиши вовремя!', w / 2, h * 0.16 + 46 * z);
   // Промо: игра от аусси Хлои — кликабельная ссылка на её дневник
-  ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillStyle = '#8fd8ff';
+  // Промо дневника Хлои — заметнее: крупнее и на пилюле-кнопке (позиция chloeY
+  // фиксирована в потоке шапки, поэтому остальная вёрстка не едет)
   const chloeText = '🐾 Игра от аусси Хлои · её дневник ВКонтакте →';
-  // Шапка меню — вертикальный ПОТОК (в единицах z): не налезает при любых пропорциях окна
   const chloeY = h * 0.16 + 70 * z;
-  ctx.fillText(chloeText, w / 2, chloeY);
+  ctx.font = `bold ${Math.round(16.5 * z)}px "Segoe UI", sans-serif`;
   const ctw = ctx.measureText(chloeText).width;
-  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 15 * z, w: ctw + 20, h: 21 * z };
+  ctx.fillStyle = 'rgba(20,60,90,0.55)';
+  ctx.strokeStyle = 'rgba(143,216,255,0.7)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(w / 2 - ctw / 2 - 13 * z, chloeY - 13 * z, ctw + 26 * z, 21 * z, 11 * z);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#bfe6ff';
+  ctx.fillText(chloeText, w / 2, chloeY + 1 * z);
+  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 13 * z, y: chloeY - 13 * z, w: ctw + 26 * z, h: 21 * z };
 
   // Переключатель режима: явные кнопки-стрелки по бокам + точки-индикаторы
   const modeFs = Math.round((isPortrait() ? 17 : 22) * z);
@@ -2103,10 +2249,10 @@ function drawMenu(dt) {
       ctx.restore();
       ctx.textAlign = 'left';
       ctx.fillStyle = sel ? '#ffe082' : '#fff';
-      ctx.font = `bold ${Math.round(19 * z)}px "Segoe UI", sans-serif`;
+      ctx.font = `bold ${Math.round(21 * z)}px "Segoe UI", sans-serif`;
       ctx.fillText(`${locked ? '🔒 ' : ''}${b.name}`, cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.42);
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.82)';
+      ctx.font = `${Math.round(14.5 * z)}px "Segoe UI", sans-serif`;
       ctx.fillText(locked ? 'Открой: 5 золотых 🥇' : b.desc,
         cx - cardW / 2 + cardH * 1.6, cy + cardH * 0.72);
       if (window.__layoutDebug) {
@@ -2115,17 +2261,29 @@ function drawMenu(dt) {
       }
       ctx.restore();
     });
+    // Явная жёлтая кнопка старта (Codex: CTA должна быть сильнее ссылки).
     ctx.textAlign = 'center';
-    ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#fff' : 'rgba(255,255,255,0.4)';
     if (window.__layoutDebug) window.__layoutDebug.startTextY = h * 0.84 - 22 * z;
-    ctx.fillText('ТАП ПО СОБАКЕ — НА СТАРТ!', w / 2, h * 0.84);
-    ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = 'rgba(255,255,255,0.65)';
-    ctx.fillText('Кнопки на экране подскажут, что жать', w / 2, h * 0.88);
+    const bw = w * 0.7, bx = w / 2 - bw / 2, byy = h * 0.835, bh = 52 * z;
+    const pulse = 0.9 + (Math.sin(app.t * 4) * 0.5 + 0.5) * 0.1;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffd54a';
+    ctx.beginPath(); ctx.roundRect(bx, byy, bw, bh, 14 * z); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = `900 ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('▶  НА СТАРТ', w / 2, byy + bh / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    app.startBtnZone = { x: bx, y: byy, w: bw, h: bh };
+    ctx.font = `${Math.round(14.5 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('или тап по выбранной собаке', w / 2, byy + bh + 22 * z);
     if (app.bestPoints) {
       ctx.fillStyle = '#ffd54a';
-      ctx.fillText(`Рекорд: ${app.bestPoints} очков`, w / 2, h * 0.92);
+      ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText(`Рекорд: ${app.bestPoints} очков`, w / 2, byy + bh + 44 * z);
     }
     ctx.restore();
     return;
@@ -2286,6 +2444,15 @@ function wrapText(ctx, text, x, y, maxW, lh, maxLines = 99) {
 function drawResults(run, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   if (!app.result) {
+    // Тихая автокалибровка: усваиваем дельты хитов слалома этого прогона
+    if (run._calibSamples && run._calibSamples.length) {
+      const st = updateCalibration(
+        { offset: settings.audioOffset || 0, hits: settings.calibHits || [] },
+        run._calibSamples);
+      settings.audioOffset = st.offset;
+      settings.calibHits = st.hits;
+      saveSettings();
+    }
     app.result = finalScore({
       time: run.time, sct: run.sct, faults: run.score.faults,
       perfects: run.score.perfects, total: run.marks.length, maxCombo: run.score.maxCombo,
@@ -2353,6 +2520,12 @@ function drawResults(run, z) {
         isDaily: app.mode === 'daily', todayStr: todayStr(),
         runOfDay: meta.counters.runsToday.n,
       });
+      // Заначка сработала молча — сообщаем постфактум (Duolingo-паттерн)
+      const frzUsed = earned.detail.find(d => d[0] === 'freezeUsed');
+      if (frzUsed) {
+        earned.detail = earned.detail.filter(d => d[0] !== 'freezeUsed');
+        toasts.push({ icon: '🧊', name: 'Заначка спасла стрик!', desc: `Покрыт пропуск (${frzUsed[1]} дн.)`, t: 0 });
+      }
       // Per-dog медали: золото копится на собаку (для будущих титульных ачивок)
       if (res0.stars >= 3) {
         meta.counters.goldByBreed = meta.counters.goldByBreed || {};
@@ -2407,12 +2580,22 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 570 : 500) * z, h * 0.88);
+  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 668 : 600) * z, h * 0.96);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  // Слоты нижней части протокола: медаль — герой (крупная, без рамки), внизу у Хлои воздух.
+  //   slot1 — итог против времени/призрака, medal — крупная медаль, earn — награда+XP, chloe — промо
+  const SL = { one: 334 * z, medal: 394 * z, medalCap: 414 * z, earn: 438 * z, chloe: 496 * z };
   ctx.save();
-  ctx.fillStyle = `rgba(6,12,10,${0.72 * ease(0, 0.3)})`;
+  // Сильнее гасим сцену за протоколом (по ревью Codex: конфетти/HUD мешали читать)
+  ctx.fillStyle = `rgba(6,12,10,${0.86 * ease(0, 0.3)})`;
   ctx.fillRect(0, 0, w, h);
-  panel(ctx, px, py, pw, ph);
+  // Непрозрачная карточка протокола
+  ctx.save();
+  ctx.globalAlpha = ease(0, 0.3);
+  ctx.fillStyle = 'rgba(14,26,20,0.98)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 16 * z); ctx.fill(); ctx.stroke();
+  ctx.restore();
   ctx.textAlign = 'center';
 
   // 1.4с: вердикт-титул с лёгким наклоном и появлением
@@ -2442,26 +2625,45 @@ function drawResults(run, z) {
     ctx.fillText('★', sx, py + 130 * z);
   }
 
-  ctx.font = `${Math.round(21 * z)}px "Segoe UI", sans-serif`;
+  // Статистика строками-пилюлями с иконкой слева и значением справа (мокап + Codex):
+  // читаемая сетка вместо центрированной каши.
   const modLine = MODIFIERS[run.modifier].mult > 1 && !run.eliminated
-    ? ` (×${MODIFIERS[run.modifier].mult})` : '';
-  // 0.4с: время (rolling), 0.9с: фолты, 1.9с: перфекты, 2.2с: очки (rolling)
+    ? ` ×${MODIFIERS[run.modifier].mult}` : '';
+  const record = ft > 2.9 && res.points >= app.bestPoints && res.points > 0;
   const rows = [
-    [0.4, () => `Время: ${(run.time * ease(0.4)).toFixed(2)}с  (SCT ${run.sct}с${res.timeFaults ? `, +${res.timeFaults} time faults` : ''})`],
-    [0.9, () => `Фолты: ${res.totalFaults}   Отказы: ${run.score.refusals}`],
-    [1.9, () => `Идеально: ${run.score.perfects}/${run.marks.length}   Макс. комбо: ×${run.score.maxCombo}`],
-    [2.2, () => `Очки: ${Math.round(res.points * ease(2.2, 0.6))}${modLine}${ft > 2.9 && res.points >= app.bestPoints && res.points > 0 ? ' — РЕКОРД!' : ''}`],
+    [0.4, '⏱', 'Время', () => `${(run.time * ease(0.4)).toFixed(2)}с / SCT ${run.sct}с${res.timeFaults ? ` +${res.timeFaults}` : ''}`],
+    [0.9, '🚫', 'Штраф', () => `${res.totalFaults} фолт · ${run.score.refusals} отказ`],
+    [1.9, '⭐', 'Идеально', () => `${run.score.perfects}/${run.marks.length} · комбо ×${run.score.maxCombo}`],
+    [2.2, '💯', 'Очки', () => `${Math.round(res.points * ease(2.2, 0.6))}${modLine}${record ? ' 🏆' : ''}`],
   ];
-  rows.forEach(([at, fn], i) => {
+  const rw = pw - 56 * z, rx = w / 2 - rw / 2, rh = 32 * z, rgap = 6 * z;
+  rows.forEach(([at, icon, label, fn], i) => {
     if (ft < at) return;
     stamp(at);
+    const yy = py + 170 * z + i * (rh + rgap);
+    ctx.save();
     ctx.globalAlpha = ease(at, 0.2);
-    ctx.fillStyle = '#e8f5ec';
-    ctx.fillText(fn(), w / 2, py + (185 + i * 38) * z);
-    ctx.globalAlpha = 1;
+    // фон-пилюля строки
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.roundRect(rx, yy, rw, rh, 9 * z); ctx.fill();
+    // иконка + подпись слева
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(icon, rx + 12 * z, yy + rh / 2 + 1);
+    ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(label, rx + 38 * z, yy + rh / 2 + 1);
+    // значение справа
+    ctx.textAlign = 'right';
+    ctx.fillStyle = i === 3 && record ? '#ffd54a' : '#e8f5ec';
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(fn(), rx + rw - 12 * z, yy + rh / 2 + 1);
+    ctx.restore();
   });
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
 
-  // Босс-дуэль: вердикт против призрака
+  // slot1 — один из: вердикт против призрака / медаль Тренера / лучший день.
+  // Взаимоисключающие: в дуэли призрак, в дейли — рекорд дня, иначе — Тренер.
   if (run.ghost && ft > 3.1) {
     const dTime = run.ghost.time - run.time;
     ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
@@ -2471,51 +2673,81 @@ function drawResults(run, z) {
       : res.qualified
         ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — не хватило ${(-dTime).toFixed(2)}с`
         : `👻 Против ${run.ghost.name} нужна квалификация (≤5 фолтов)`;
-    ctx.fillText(msg, w / 2, py + 320 * z);
+    ctx.fillText(msg, w / 2, py + SL.one);
+  } else if (app.mode === 'daily' && app.newDailyBest && ft > 3.2) {
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText('⭐ Лучший результат дня!', w / 2, py + SL.one);
+  } else if (ft > 2.5 && res.qualified) {
+    const mt = medalTimes(run.sct);
+    const tier = timeMedal(run.time, run.sct);
+    const dAuthor = run.time - mt.author;
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = tier === 'author' ? '#ffd54a' : '#cfe4ff';
+    const label = { author: '', gold: '🥇 Золото времени',
+      silver: '🥈 Серебро времени', bronze: '🥉 Бронза времени' }[tier] || '';
+    const msg = tier === 'author'
+      ? `🏅 Медаль Тренера! (${mt.author.toFixed(1)}с)`
+      : `${label} · до Тренера ${dAuthor > 0 ? dAuthor.toFixed(1) + 'с' : '—'}`;
+    ctx.fillText(msg, w / 2, py + SL.one);
   }
 
-  // 3.0с: медаль с bounce
+  // Медаль — герой протокола: крупная, без рамки, с лёгким свечением и bounce.
   if (res.stars > 0 && ft >= 3.0) {
     stamp(3.0);
     const k = ease(3.0, 0.35);
     const bounce = 1 + Math.sin(k * Math.PI) * 0.5;
-    ctx.font = `${Math.round(30 * z * bounce)}px "Segoe UI", sans-serif`;
-    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal && ft > 3.4 ? ' Новая медаль!' : ''}`, w / 2, py + 345 * z);
-  }
-  if (app.mode === 'daily' && app.newDailyBest && ft > 3.2) {
-    ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#ffd54a';
-    ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(255,213,74,0.6)'; ctx.shadowBlur = 18 * z;
+    ctx.font = `${Math.round(52 * z * bounce)}px "Segoe UI", sans-serif`;
+    ctx.fillText(MEDAL_ICON[res.stars], w / 2, py + SL.medal);
+    ctx.restore();
+    if (app.newMedal && ft > 3.4) {
+      ctx.fillStyle = '#ffd54a';
+      ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText('Новая медаль!', w / 2, py + SL.medalCap);
+    }
   }
 
-  // V2: заработанное за прогон + XP-бар собаки (уровень в той же строке —
-  // подпись под баром накладывалась на промо-строку Хлои)
+  // slot3 — награда за прогон + XP-бар собаки, сгруппированы в блок
   if (app.lastEarn && ft > 3.3) {
     const e = app.lastEarn;
     const d = dogState(meta, e.breedId);
     const tg = titleFor(d.level);
-    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    const bw = pw - 100 * z, bx = w / 2 - bw / 2, byy = py + SL.earn - 14 * z;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.roundRect(bx, byy, bw, 40 * z, 10 * z); ctx.fill();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffe9a8';
-    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? `   +${e.rosettes} 🏵️` : ''}   +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
-      w / 2, py + (IS_TOUCH ? 420 : 372) * z);
-    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + (IS_TOUCH ? 434 : 386) * z;
+    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? ` +${e.rosettes} 🏵️` : ''}  ·  +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
+      w / 2, byy + 16 * z);
+    const bw2 = bw - 32 * z, bx2 = w / 2 - bw2 / 2, by2 = byy + 26 * z;
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillRect(bx2, by2, bw2, 7 * z);
+    ctx.beginPath(); ctx.roundRect(bx2, by2, bw2, 7 * z, 3.5 * z); ctx.fill();
     ctx.fillStyle = '#69f0ae';
-    ctx.fillRect(bx2, by2, bw2 * Math.min(1, d.xp / xpToNext(d.level)), 7 * z);
+    ctx.beginPath(); ctx.roundRect(bx2, by2, bw2 * Math.min(1, d.xp / xpToNext(d.level)), 7 * z, 3.5 * z); ctx.fill();
+    ctx.restore();
   }
 
-  // Промо Хлои: после провала — поддержка, после победы — приглашение в дневник
+  // slot4 — промо Хлои: после провала поддержка, после победы приглашение в дневник
   if (ft > 2.8) {
     const chloeMsg = res.qualified
       ? '🐾 Хлоя гордится тобой! Её дневник →'
       : '🐾 Хлоя верит в тебя! Загляни в её дневник →';
-    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#8fd8ff';
-    const cy2 = py + (IS_TOUCH ? 400 : 405) * z;
-    ctx.fillText(chloeMsg, w / 2, cy2);
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    const cy2 = py + SL.chloe;
     const ctw2 = ctx.measureText(chloeMsg).width;
-    app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 10, y: cy2 - 16 * z, w: ctw2 + 20, h: 26 * z };
+    // Пилюля-кнопка — заметнее (слот SL.chloe фиксирован, вёрстка не едет)
+    ctx.fillStyle = 'rgba(20,60,90,0.5)';
+    ctx.strokeStyle = 'rgba(143,216,255,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(w / 2 - ctw2 / 2 - 12 * z, cy2 - 15 * z, ctw2 + 24 * z, 25 * z, 12 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#bfe6ff';
+    ctx.fillText(chloeMsg, w / 2, cy2 + 1 * z);
+    app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 12 * z, y: cy2 - 15 * z, w: ctw2 + 24 * z, h: 25 * z };
   } else {
     app.chloeZoneResults = null;
   }
@@ -2628,6 +2860,7 @@ function frame(now) {
     app.run.draw();
     drawHud(app.run);
     const z = Math.min(canvas.width, canvas.height) / 700;
+    if (app.testDrive && TEST_MODE === 's1') drawDemoLegend(app.run, z);
     if (app.run.phase === 'finished' && app.run.finishT > 0.4 && !app.run.warmup) {
       app.state = 'results';
     }
