@@ -6,3 +6,7 @@ package-lock.json
 tests/shots/
 !tests/shots/visual/REVIEW.md
 !tests/shots/visual/manifest.json
+
+# image-харнесс: ключ и мокапы не в публичный репо
+tools/.imagegen-key
+tools/mockups/
