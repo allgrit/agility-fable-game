@@ -51,10 +51,11 @@ export const GROOVE_WINDOWS = {
   masters:   { p: 0.045, g: 0.085, o: 0.125 },
 };
 
-// PS-style обманки: на press-снарядах показываем несколько кнопок,
-// настоящая раскрывается за reveal секунд до цели. Сложнее с классом.
-export const DECOY_CHANCE = { novice: 0, open: 0.2, excellent: 0.5, masters: 0.75 };
-export const DECOY_REVEAL = { novice: 0.6, open: 0.55, excellent: 0.45, masters: 0.35 };
+// PS-style обманки: на press-снарядах показываем несколько кнопок, настоящая
+// раскрывается за reveal секунд до цели. Настоящие, но РЕДКИЕ — иначе на мобайле
+// (основная платформа) слишком сложно тянуться к разным кнопкам.
+export const DECOY_CHANCE = { novice: 0, open: 0.1, excellent: 0.18, masters: 0.3 };
+export const DECOY_REVEAL = { novice: 0.6, open: 0.6, excellent: 0.55, masters: 0.5 };
 const ALL_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
 export function makeDecoys(realKey, cls, rand = Math.random) {
@@ -280,7 +281,10 @@ export class Qte {
     const d = this.def, w = this.w;
     switch (d.kind) {
       case 'press': {
-        if (key !== d.key) { this._finish('miss', 5, wrongLabel(this.type)); break; }
+        // pressKey — настоящая обманка: требуемая клавиша задаётся извне (случайная
+        // из показанных «?»), не всегда Space. По умолчанию — натуральная клавиша.
+        const need = this.pressKey || d.key;
+        if (key !== need) { this._finish('miss', 5, wrongLabel(this.type)); break; }
         // Раннее нажатие до окна: первое прощаем («собака ещё не готова»),
         // каждое следующее — анти-спам: сжимаем окно на 25% (Sekiro), не фейлим.
         // Убирает доминирующую стратегию «тапать заранее» на обманках.

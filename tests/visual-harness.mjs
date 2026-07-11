@@ -239,7 +239,17 @@ const SCENES = [
   {
     name: '30-trainer-medal', mode: 'career', cls: 'novice', stage: 1,
     predicate: 'false', thenFinishT: 3.4,
-    criteria: 'Протокол с медалью Тренера (S1.6): под строкой очков строка «🏅 Медаль Тренера!» или «🥇 Золото времени · до Тренера N.Nс» — цель для re-run.',
+    criteria: 'Протокол с медалью Тренера (S1.6): под строкой очков строка «🏅 Медаль Тренера!» или «🥇 Золото времени · до Тренера N.Nс» — цель для re-run. Строки разнесены по слотам, без слипания.',
+  },
+  {
+    name: '31-risk-hint', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "m && m.qte && m.qte.state==='active' && m.qte.def.kind==='press' && !m.risk && run.focus.count>0 && (run.time-m.qteStart) < m.qte.target - m.qte.w && run.time > 1.2",
+    criteria: 'Подсказка риска в ходе забега: мигающая оранжевая плашка «⚡ SHIFT — риск ×2» (на таче «тап по хендлеру») — пока окно не открылось. Раньше SHIFT был неочевиден.',
+  },
+  {
+    name: '32-decoy-reveal', mode: 'career', cls: 'excellent', stage: 3,
+    predicate: "m && m.decoys && m.decoys.revealed && m.qte.state==='active'",
+    criteria: 'Обманка раскрыта: крупная надпись «ЖМИ!» + кейкап настоящей клавиши (может быть НЕ ПРОБЕЛ — ←/↑/↓). Обманки теперь настоящие и редкие.',
   },
 ];
 

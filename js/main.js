@@ -665,6 +665,8 @@ function startRun() {
     app.run.startLine = TEST_MODE === 's1'
       ? 'Демо Game Feel! Слушай слалом, лови ×2 риск, смотри дельту призрака.'
       : 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
+    // Демо S1: ровно одна настоящая обманка (на 5-м снаряде) — показать механику
+    if (TEST_MODE === 's1') app.run.demoDecoyOnce = 4;
   } else if (isBossStage() || app.bossChallenge) {
     const bcls = app.bossChallenge || app.cls;
     const boss = bossFor(bcls);
@@ -842,6 +844,30 @@ function drawHud(run) {
   const m = run.activeMark;
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running') drawQte(run, m, z);
 
+  // Подсказка риска (S1): пока можно заявить (окно ещё не открыто, есть фокус) —
+  // мигающая плашка «SHIFT / тап по хендлеру = риск ×2». SHIFT неочевиден без неё.
+  if (m && m.qte && m.qte.state === 'active' && run.phase === 'running'
+      && run.focus?.count > 0 && !m.risk
+      && (m.qte.def.kind === 'press' || m.qte.def.kind === 'doubleTap')
+      && !(m.decoys && !m.decoys.revealed)) {
+    const tq = run.time - m.qteStart;
+    if (tq < m.qte.target - m.qte.w) {
+      ctx.save();
+      ctx.textAlign = 'center';
+      const blink = Math.sin(run.time * 6) > -0.2;
+      const txt = IS_TOUCH ? '⚡ Тап по хендлеру — риск ×2' : '⚡ SHIFT — риск ×2';
+      ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+      const tw = ctx.measureText(txt).width;
+      const ry = IS_TOUCH ? h * 0.4 : h * 0.68;
+      ctx.globalAlpha = blink ? 1 : 0.5;
+      ctx.fillStyle = 'rgba(40,20,10,0.8)';
+      ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2 - 12 * z, ry - 15 * z, tw + 24 * z, 26 * z, 8 * z); ctx.fill();
+      ctx.fillStyle = '#ff8a65';
+      ctx.fillText(txt, w / 2, ry + 2 * z);
+      ctx.restore();
+    }
+  }
+
   // Реплика хендлера: на ритуале старта и сразу после финиша
   const line = run.phase === 'countdown' ? run.startLine
     : (run.phase === 'finished' && run.finishT < 2.6 ? run.finishLine : null);
@@ -875,7 +901,7 @@ function expectedKey(run) {
     return t >= beatT - (IS_TOUCH ? 1.0 : d.reveal) ? q.seq[q.beatIdx] : null;
   }
   if (d.kind === 'freeze') return q.stage === 1 ? null : d.key; // во время счёта НЕ жать
-  return d.key;
+  return q.pressKey || d.key; // настоящая обманка: подсвечиваем раскрытую клавишу
 }
 
 function drawTouchControls(run) {
@@ -1913,16 +1939,27 @@ function drawQte(run, m, z) {
     keycap(ctx, cx, cy, 52 * z, KEY_LABEL[def.key2], '#ffd54a');
     ring(ctx, cx, cy, 52 * z + rem * 90 * z, '#ffd54a');
   } else if (m.decoys && !m.decoys.revealed) {
-    // PS-style обманка: три кандидата, настоящая кнопка раскроется позже
+    // Обманка до раскрытия: кандидаты крутятся, настоящая кнопка ещё не ясна.
+    // Красный «?» = «жди, не тапай» (цветовая грамматика).
     const step = 92 * z;
     const spin = Math.floor(run.time * 9) % m.decoys.options.length;
     m.decoys.options.forEach((k, i) => {
       keycap(ctx, cx + (i - 1) * step, cy, 42 * z * (i === spin ? 1.12 : 0.9), KEY_LABEL[k],
-        i === spin ? '#ffd54a' : 'rgba(255,255,255,0.45)');
+        i === spin ? '#ff8a65' : 'rgba(255,255,255,0.4)');
     });
-    ctx.fillStyle = '#ffd54a';
+    ctx.fillStyle = '#ff6b6b';
     ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
     ctx.fillText('?', cx, cy - 62 * z);
+  } else if (m.decoys && m.decoys.revealed) {
+    // Обманка раскрыта: крупно бьём настоящую клавишу — реагируй! (и на таче
+    // подсветится соответствующая кнопка через expectedKey)
+    const need = q.pressKey || def.key;
+    const inGood = Math.abs(t - q.target) <= q.w * 0.6;
+    const pulse = 1 + Math.sin(run.time * 24) * 0.12;
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `900 ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('ЖМИ!', cx, cy - 60 * z);
+    keycap(ctx, cx, cy, 50 * z * pulse, KEY_LABEL[need], inGood ? '#ffd54a' : '#fff');
   } else if (def.kind === 'press') {
     // press: ГЛАВНЫЙ индикатор тайминга — кольцо вокруг собаки (game.js).
     // Здесь только «какую клавишу жать» (на таче это делает сама кнопка).
@@ -1930,7 +1967,7 @@ function drawQte(run, m, z) {
       const inPerfect = Math.abs(t - q.target) <= q.w * 0.28;
       const inGood = Math.abs(t - q.target) <= q.w * 0.6;
       const pulse = inPerfect ? 1 + Math.sin(run.time * 22) * 0.08 : 1;
-      keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[def.key],
+      keycap(ctx, cx, cy, 44 * z * pulse, KEY_LABEL[q.pressKey || def.key],
         inPerfect ? '#ffd54a' : inGood ? '#9ff0b4' : 'rgba(255,255,255,0.85)');
     }
   } else {
@@ -2523,8 +2560,11 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 570 : 500) * z, h * 0.88);
+  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 610 : 540) * z, h * 0.92);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  // Слоты нижней части протокола — единый ритм, без слипания (по фидбеку):
+  //   slot1 — итог против времени/призрака, slot2 — медаль, slot3 — награда+XP, slot4 — промо
+  const SL = { one: 330 * z, two: 366 * z, earn: 400 * z, bar: 416 * z, chloe: 446 * z };
   ctx.save();
   ctx.fillStyle = `rgba(6,12,10,${0.72 * ease(0, 0.3)})`;
   ctx.fillRect(0, 0, w, h);
@@ -2577,9 +2617,23 @@ function drawResults(run, z) {
     ctx.globalAlpha = 1;
   });
 
-  // Медаль Тренера (S1.6): время против часов, мотиватор re-run.
-  // В босс-дуэли эту строку заменяет вердикт против призрака (ниже) — не дублируем.
-  if (ft > 2.5 && res.qualified && !run.ghost) {
+  // slot1 — один из: вердикт против призрака / медаль Тренера / лучший день.
+  // Взаимоисключающие: в дуэли призрак, в дейли — рекорд дня, иначе — Тренер.
+  if (run.ghost && ft > 3.1) {
+    const dTime = run.ghost.time - run.time;
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = dTime > 0 && res.qualified ? '#b388ff' : '#ff8a8a';
+    const msg = dTime > 0 && res.qualified
+      ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — ты быстрее на ${dTime.toFixed(2)}с!`
+      : res.qualified
+        ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — не хватило ${(-dTime).toFixed(2)}с`
+        : `👻 Против ${run.ghost.name} нужна квалификация (≤5 фолтов)`;
+    ctx.fillText(msg, w / 2, py + SL.one);
+  } else if (app.mode === 'daily' && app.newDailyBest && ft > 3.2) {
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText('⭐ Лучший результат дня!', w / 2, py + SL.one);
+  } else if (ft > 2.5 && res.qualified) {
     const mt = medalTimes(run.sct);
     const tier = timeMedal(run.time, run.sct);
     const dAuthor = run.time - mt.author;
@@ -2590,38 +2644,20 @@ function drawResults(run, z) {
     const msg = tier === 'author'
       ? `🏅 Медаль Тренера! (${mt.author.toFixed(1)}с)`
       : `${label} · до Тренера ${dAuthor > 0 ? dAuthor.toFixed(1) + 'с' : '—'}`;
-    ctx.fillText(msg, w / 2, py + 320 * z);
+    ctx.fillText(msg, w / 2, py + SL.one);
   }
 
-  // Босс-дуэль: вердикт против призрака
-  if (run.ghost && ft > 3.1) {
-    const dTime = run.ghost.time - run.time;
-    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = dTime > 0 && res.qualified ? '#b388ff' : '#ff8a8a';
-    const msg = dTime > 0 && res.qualified
-      ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — ты быстрее на ${dTime.toFixed(2)}с!`
-      : res.qualified
-        ? `👻 ${run.ghost.name}: ${run.ghost.time.toFixed(2)}с — не хватило ${(-dTime).toFixed(2)}с`
-        : `👻 Против ${run.ghost.name} нужна квалификация (≤5 фолтов)`;
-    ctx.fillText(msg, w / 2, py + 320 * z);
-  }
-
-  // 3.0с: медаль с bounce
+  // slot2 — медаль с bounce
   if (res.stars > 0 && ft >= 3.0) {
     stamp(3.0);
     const k = ease(3.0, 0.35);
     const bounce = 1 + Math.sin(k * Math.PI) * 0.5;
-    ctx.font = `${Math.round(30 * z * bounce)}px "Segoe UI", sans-serif`;
-    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal && ft > 3.4 ? ' Новая медаль!' : ''}`, w / 2, py + 345 * z);
-  }
-  if (app.mode === 'daily' && app.newDailyBest && ft > 3.2) {
-    ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#ffd54a';
-    ctx.fillText('Лучший результат дня!', w / 2, py + 375 * z);
+    ctx.font = `${Math.round(28 * z * bounce)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`${MEDAL_ICON[res.stars]}${app.newMedal && ft > 3.4 ? ' Новая медаль!' : ''}`, w / 2, py + SL.two);
   }
 
-  // V2: заработанное за прогон + XP-бар собаки (уровень в той же строке —
-  // подпись под баром накладывалась на промо-строку Хлои)
+  // slot3 — заработанное за прогон + XP-бар собаки
   if (app.lastEarn && ft > 3.3) {
     const e = app.lastEarn;
     const d = dogState(meta, e.breedId);
@@ -2629,22 +2665,22 @@ function drawResults(run, z) {
     ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffe9a8';
     ctx.fillText(`+${e.bones} 🦴${e.rosettes ? `   +${e.rosettes} 🏵️` : ''}   +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
-      w / 2, py + (IS_TOUCH ? 420 : 372) * z);
-    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + (IS_TOUCH ? 434 : 386) * z;
+      w / 2, py + SL.earn);
+    const bw2 = 220 * z, bx2 = w / 2 - bw2 / 2, by2 = py + SL.bar;
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.fillRect(bx2, by2, bw2, 7 * z);
     ctx.fillStyle = '#69f0ae';
     ctx.fillRect(bx2, by2, bw2 * Math.min(1, d.xp / xpToNext(d.level)), 7 * z);
   }
 
-  // Промо Хлои: после провала — поддержка, после победы — приглашение в дневник
+  // slot4 — промо Хлои: после провала поддержка, после победы приглашение в дневник
   if (ft > 2.8) {
     const chloeMsg = res.qualified
       ? '🐾 Хлоя гордится тобой! Её дневник →'
       : '🐾 Хлоя верит в тебя! Загляни в её дневник →';
     ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#8fd8ff';
-    const cy2 = py + (IS_TOUCH ? 400 : 405) * z;
+    const cy2 = py + SL.chloe;
     ctx.fillText(chloeMsg, w / 2, cy2);
     const ctw2 = ctx.measureText(chloeMsg).width;
     app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 10, y: cy2 - 16 * z, w: ctw2 + 20, h: 26 * z };

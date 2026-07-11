@@ -219,9 +219,15 @@ export class Run {
               this.hintSlow = 2.4;
             }
           }
-          // PS-style обманка: только press-QTE, шанс растёт с классом.
-          if (nm.qte.def.kind === 'press' && Math.random() < (DECOY_CHANCE[this.course.cls] || 0)) {
+          // PS-style обманка: только press-QTE, шанс растёт с классом (редкая).
+          const decoyChance = this.demoDecoyOnce != null
+            ? (next === this.demoDecoyOnce ? 1 : 0)   // демо: ровно одна обманка
+            : (DECOY_CHANCE[this.course.cls] || 0);
+          if (nm.qte.def.kind === 'press' && Math.random() < decoyChance) {
             nm.decoys = makeDecoys(nm.qte.def.key, this.course.cls);
+            // Настоящая обманка: требуемая клавиша — случайная из показанных
+            nm.decoys.realKey = nm.decoys.options[Math.floor(Math.random() * nm.decoys.options.length)];
+            nm.qte.pressKey = nm.decoys.realKey;
             // Шелти: чутьё — обманка раскрывается заметно раньше
             if (this.breed.ability === 'sense') nm.decoys.reveal *= 1.45;
             nm.decoys.revealAt = nm.qte.target - nm.decoys.reveal;
@@ -625,8 +631,23 @@ export class Run {
     const d = this.dog;
     const p = this.path.pointAt(d.dist);
     const tg = this.path.tangentAt(d.dist);
-    d.x = p.x; d.y = p.y;
-    d.heading = Math.atan2(tg.y, tg.x);
+    // Боковое виляние в слаломе: собака зигзагом обходит стойки в такт битам —
+    // теперь движение читается как «змейка», а не как скольжение по прямой.
+    let ox = 0, oy = 0;
+    const wm = this.activeMark;
+    if (wm && wm.o.type === 'weave' && wm.qte && wm.qte.def.kind === 'groove'
+        && d.dist >= wm.entryD - 0.6 && d.dist <= wm.exitD + 0.6) {
+      const q = wm.qte;
+      // Фаза виляния следует за долей бита: плавная синусоида, сторона по beatIdx
+      const bt = q.nextBeatT != null ? Math.max(0, q.nextBeatT - (this.time - wm.qteStart)) / Math.max(0.1, q.beat) : 0;
+      const phase = (q.beatIdx + (1 - bt)) * Math.PI;
+      const amp = 0.9 * Math.min(1, (d.dist - (wm.entryD - 0.6)) / 0.8) * Math.min(1, (wm.exitD + 0.6 - d.dist) / 0.8);
+      const px = -tg.y, py = tg.x; // перпендикуляр к ходу
+      d.weaving = Math.sin(phase) * amp;
+      ox = px * d.weaving; oy = py * d.weaving;
+    } else d.weaving = 0;
+    d.x = p.x + ox; d.y = p.y + oy;
+    d.heading = Math.atan2(tg.y, tg.x) + (d.weaving || 0) * 0.25;
     d.runPhase += d.speed * dt * 2.2;
 
     // Высота: прыжковая дуга или профиль снаряда
