@@ -2121,14 +2121,19 @@ function drawMenu(dt) {
   ctx.fillStyle = '#e0f2e9';
   ctx.fillText('Ты — собака. Слушай хендлера и жми верные клавиши вовремя!', w / 2, h * 0.16 + 46 * z);
   // Промо: игра от аусси Хлои — кликабельная ссылка на её дневник
-  ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillStyle = '#8fd8ff';
+  // Промо дневника Хлои — заметнее: крупнее и на пилюле-кнопке (позиция chloeY
+  // фиксирована в потоке шапки, поэтому остальная вёрстка не едет)
   const chloeText = '🐾 Игра от аусси Хлои · её дневник ВКонтакте →';
-  // Шапка меню — вертикальный ПОТОК (в единицах z): не налезает при любых пропорциях окна
   const chloeY = h * 0.16 + 70 * z;
-  ctx.fillText(chloeText, w / 2, chloeY);
+  ctx.font = `bold ${Math.round(16.5 * z)}px "Segoe UI", sans-serif`;
   const ctw = ctx.measureText(chloeText).width;
-  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 10, y: chloeY - 15 * z, w: ctw + 20, h: 21 * z };
+  ctx.fillStyle = 'rgba(20,60,90,0.55)';
+  ctx.strokeStyle = 'rgba(143,216,255,0.7)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(w / 2 - ctw / 2 - 13 * z, chloeY - 13 * z, ctw + 26 * z, 21 * z, 11 * z);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#bfe6ff';
+  ctx.fillText(chloeText, w / 2, chloeY + 1 * z);
+  app.chloeZoneMenu = { x: w / 2 - ctw / 2 - 13 * z, y: chloeY - 13 * z, w: ctw + 26 * z, h: 21 * z };
 
   // Переключатель режима: явные кнопки-стрелки по бокам + точки-индикаторы
   const modeFs = Math.round((isPortrait() ? 17 : 22) * z);
@@ -2678,12 +2683,17 @@ function drawResults(run, z) {
     const chloeMsg = res.qualified
       ? '🐾 Хлоя гордится тобой! Её дневник →'
       : '🐾 Хлоя верит в тебя! Загляни в её дневник →';
-    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#8fd8ff';
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
     const cy2 = py + SL.chloe;
-    ctx.fillText(chloeMsg, w / 2, cy2);
     const ctw2 = ctx.measureText(chloeMsg).width;
-    app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 10, y: cy2 - 16 * z, w: ctw2 + 20, h: 26 * z };
+    // Пилюля-кнопка — заметнее (слот SL.chloe фиксирован, вёрстка не едет)
+    ctx.fillStyle = 'rgba(20,60,90,0.5)';
+    ctx.strokeStyle = 'rgba(143,216,255,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(w / 2 - ctw2 / 2 - 12 * z, cy2 - 15 * z, ctw2 + 24 * z, 25 * z, 12 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#bfe6ff';
+    ctx.fillText(chloeMsg, w / 2, cy2 + 1 * z);
+    app.chloeZoneResults = { x: w / 2 - ctw2 / 2 - 12 * z, y: cy2 - 15 * z, w: ctw2 + 24 * z, h: 25 * z };
   } else {
     app.chloeZoneResults = null;
   }

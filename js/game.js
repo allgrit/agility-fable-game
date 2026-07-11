@@ -280,16 +280,18 @@ export class Run {
     let target = this.baseSpeed() * this.comboMul() * (1 + this.sprint.boost);
     if (this.boost > 0) { target *= 1.3; this.boost -= dt; }
     if (this.slowT > 0) { target *= 0.6; this.slowT -= dt; }
+    let grooveFollow = null; // непрерывная целевая дистанция для слалома (см. ниже)
     if (m && !m.resolved && m.o.type === 'weave' && m.qte
         && m.qte.def.kind === 'groove' && m.qte.state === 'active') {
-      // Groove-слалом: собака идёт «стойка-в-бит» — позиция привязана к битам,
-      // визуал и ритм не расходятся. При возврате на 1-ю стойку отбегает назад.
+      // Groove-слалом: позиция собаки НЕПРЕРЫВНО следует за долей бита (не ступенями) —
+      // собака ровно ползёт от стойки к стойке, доходит до выхода точно на 12-м бите.
+      // Пока идёт приближение к 1-й стойке (beatIdx 0, ещё не в слаломе) — бежит как обычно.
       const q = m.qte;
-      const beatProgress = Math.min(1, q.beatIdx / q.def.beats);
-      const wantD = m.entryD + beatProgress * (m.exitD - m.entryD);
       const tq = this.time - m.qteStart;
-      const eta = Math.max(0.15, (q.nextBeatT ?? tq) - tq);
-      target = Math.min(target, Math.max(-2.5, (wantD - d.dist) / eta));
+      // непрерывная доля: beatIdx + сколько прошло до следующего бита
+      const bt = q.nextBeatT != null ? Math.max(0, Math.min(1, 1 - (q.nextBeatT - tq) / Math.max(0.05, q.beat))) : 0;
+      const contBeat = Math.min(1, (q.beatIdx + bt) / q.def.beats);
+      grooveFollow = m.entryD + contBeat * (m.exitD - m.entryD);
     } else if (m && !m.resolved && SYNC_TYPES.has(m.o.type) && m.qte && m.qte.state === 'active') {
       // На "синхронных" снарядах не убегаем дальше точки ожидания
       // (градиентное замедление — без ощущения "вкопанной" остановки).
@@ -311,7 +313,15 @@ export class Run {
     if (this.judgeArmT > 0) this.judgeArmT -= dt;
     this.r.crowdFocusX = d.x;
     d.speed += (target - d.speed) * Math.min(1, dt * 5);
-    d.dist += d.speed * dt;
+    // В слаломе позицию ведёт бит-клок напрямую (тугое следование) — идеальная
+    // синхронизация с ритм-игрой. Но только когда собака уже вошла в слалом:
+    // на подлёте (grooveFollow позади собаки) бежим обычной скоростью к 1-й стойке.
+    if (grooveFollow != null && grooveFollow >= d.dist - 0.05) {
+      d.dist += (grooveFollow - d.dist) * Math.min(1, dt * 14);
+      d.speed = Math.max(d.speed, 1.5); // ненулевая для анимации бега
+    } else {
+      d.dist += d.speed * dt;
+    }
 
     // Пузырь хендлера нервничает синхронно с приближением к точке нажатия.
     if (this.handler.speech && m && m.qte && m.qte.state === 'active'
