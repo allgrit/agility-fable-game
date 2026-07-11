@@ -1,7 +1,7 @@
 // Service worker: network-first — каждый заход тянет свежие файлы с сервера
 // (обходя HTTP-кеш браузера), офлайн-фолбэк из кеша. Любой деплой виден
 // клиентам при следующей загрузке страницы без ручной очистки кеша.
-const BUILD = 'build-2026-07-11-1-duels';
+const BUILD = 'build-2026-07-11-2-s1-gamefeel';
 
 self.addEventListener('install', () => self.skipWaiting());
 
