@@ -80,7 +80,8 @@ async function newPage(browser, { width, height, touch }) {
   const consoleErrors = [];
   page.on('pageerror', e => consoleErrors.push(String(e)));
   page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
-  await page.goto(BASE + (touch ? '/?touch=1' : '/'));
+  // noanalytics: тесты не должны слать аналитику и результаты на прод-бэкенд.
+  await page.goto(BASE + (touch ? '/?touch=1&noanalytics' : '/?noanalytics'));
   await page.waitForFunction(() => !!window.__agility);
   return { page, context, consoleErrors };
 }

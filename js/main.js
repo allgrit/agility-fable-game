@@ -16,6 +16,10 @@ import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.j
 import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
 import { setHapticsEnabled } from './haptics.js';
 import { updateCalibration } from './calibrate.js';
+// Fable Arcade SDK: аналитика игроков + онлайн-лидерборд (общий бэкенд по game-id).
+import { SDK } from '../sdk/config.js';
+import { track, telemetryEnabled } from '../sdk/analytics.js';
+import { submitScore, fetchTop } from '../sdk/leaderboard.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -30,6 +34,12 @@ if ('serviceWorker' in navigator &&
     location.reload();
   });
 }
+
+// Аналитика: загрузка игры (даёт распределение по версиям и работу автообновления).
+track('game_loaded', {
+  device: (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) ? 'touch' : 'desktop',
+  w: window.innerWidth, h: window.innerHeight,
+});
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -87,6 +97,31 @@ function saveRunToBoard(run, res) {
 function saveProgress() {
   localStorage.setItem('agility_class', app.cls);
   localStorage.setItem('agility_stage', String(app.stage));
+}
+
+// ---------- ОНЛАЙН-ЛИДЕРБОРД (Fable Arcade SDK) ----------
+// Имя игрока для онлайн-топа: спрашиваем один раз при первой отправке, дальше помним.
+function playerName() {
+  let n = localStorage.getItem('agility_player');
+  if (!n) {
+    try { n = (window.prompt('Имя для онлайн-рейтинга (видно всем):', '') || '').trim(); } catch { n = ''; }
+    n = (n || 'Аноним').slice(0, 24);
+    localStorage.setItem('agility_player', n);
+  }
+  return n;
+}
+function submitOnline(points, time) {
+  if (!telemetryEnabled()) return; // тесты/харнесс не шлют реальные результаты на прод
+  const r = submitScore(playerName(), points, time);
+  if (r && r.then) r.then((res) => { if (res && res.rank) app.onlineRank = res.rank; });
+}
+// Онлайн-топ для экрана лидерборда: тянем при открытии, кэшируем в app.
+function refreshOnlineTop() {
+  if (!telemetryEnabled()) { app.onlineTop = []; return; }
+  app.onlineTopLoading = true;
+  const p = fetchTop('all', 10);
+  if (p && p.then) p.then((top) => { app.onlineTop = top || []; app.onlineTopLoading = false; })
+    .catch(() => { app.onlineTop = []; app.onlineTopLoading = false; });
 }
 
 // ---------- МОДИФИКАТОРЫ-ИСПЫТАНИЯ (трасса дня) ----------
@@ -682,6 +717,10 @@ function startRun() {
   app.state = 'run';
   app.result = null;
   audio.crowdLevel(0.15);
+  // Аналитика: старт забега (run_id связывает старт с исходом).
+  app._runId = String(Date.now()) + '-' + (app._runN = (app._runN || 0) + 1);
+  track('run_start', { run_id: app._runId, mode: app.mode, cls: app.cls, stage: app.stage,
+    breed: breed.id, course: course.name });
 }
 
 // Онбординг: «Двор» — jump, jump, tunnel с гигантскими окнами; miss = мягкий повтор.
@@ -1601,7 +1640,18 @@ function drawBoard() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffd54a';
   ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillText('🏆 ЛУЧШИЕ ПРОГОНЫ', w / 2, py + 44 * z);
+  ctx.fillText('🏆 ЛУЧШИЕ ПРОГОНЫ', w / 2, py + 40 * z);
+
+  // Онлайн-топ (Fable Arcade): компактная строка мировых лидеров + твой ранг.
+  if (app.onlineTop === undefined && !app.onlineTopLoading) refreshOnlineTop();
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#8fd8ff';
+  let ol = '🌐 ';
+  if (app.onlineTopLoading || app.onlineTop === undefined) ol += 'загрузка онлайн-топа…';
+  else if (!app.onlineTop.length) ol += 'онлайн-топ пуст — будь первым!';
+  else ol += app.onlineTop.slice(0, 3).map((e, i) => `${i + 1}. ${e.name} ${e.score}`).join('   ·   ');
+  if (app.onlineRank) ol += `    (ты #${app.onlineRank})`;
+  ctx.fillText(ol.length > 74 ? ol.slice(0, 73) + '…' : ol, w / 2, py + 62 * z);
 
   if (!board.length) {
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
@@ -2108,6 +2158,13 @@ function drawMenu(dt) {
   ctx.fillRect(0, 0, w, h);
 
   const z = Math.min(w, h) / 700;
+  // Версия сборки (Fable Arcade SDK): левый нижний угол — видно, обновилась ли игра.
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.fillText(SDK.VERSION, 12 * z, h - 10 * z);
+  ctx.restore();
   ctx.save();
   ctx.textAlign = 'center';
   ctx.font = `900 ${Math.round(64 * z)}px "Segoe UI", sans-serif`;
@@ -2499,6 +2556,15 @@ function drawResults(run, z) {
       localStorage.setItem('agility_best', String(app.bestPoints));
     }
     saveRunToBoard(run, app.result);
+
+    // Аналитика + онлайн-лидерборд (кроме разминки и тест-драйва).
+    if (!run.warmup && !app.testDrive) {
+      track('run_end', { run_id: app._runId, points: app.result.points, time: +run.time.toFixed(2),
+        faults: app.result.totalFaults, stars: app.result.stars, clean: !!app.result.clean,
+        qualified: !!app.result.qualified, eliminated: !!run.eliminated,
+        obstacles: run.marks.length, mode: app.mode, cls: app.cls, breed: run.breed.name });
+      if (app.result.points > 0) submitOnline(app.result.points, run.time);
+    }
 
     // ---- V2 Мета: перфект-челлендж (4-я звезда), валюты, XP, задания ----
     if (!run.warmup) {
