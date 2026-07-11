@@ -37,7 +37,8 @@ const audio = new AudioEngine();
 const fx = new Particles();
 
 const STAGES = 5; // трасс в каждом классе карьеры
-// Тест-драйв V4: ?test=v4 — одна трасса со всеми новыми механиками, без прогрессии
+// Тест-драйв: ?test=v4 — механики V4; ?test=s1 — демо новинок «Game Feel»
+const TEST_MODE = new URLSearchParams(location.search).get('test'); // 'v4' | 's1' | '' | null
 const TEST_DRIVE = new URLSearchParams(location.search).has('test');
 const FREEZE_MAX = 2, FREEZE_COST = 200; // заначка стрика (S1.5)
 
@@ -618,6 +619,15 @@ function startRun() {
   } else if (app.mode === 'daily') {
     course = generateCourse(todayNum() * 13 + 7, dailyCls());
     course.name = `Трасса дня ${todayStr()}`;
+  } else if (app.testDrive && TEST_MODE === 's1') {
+    // Демо S1 «Game Feel» (?test=s1): короткая трасса, заточенная под новинки —
+    // прыжки (hitstop/squash/микро-дельта/анти-спам обманок), groove-слалом
+    // (хитсаунды/питч-лесенка/стресс-окно), финиш (медаль Тренера); призрак Эйва
+    // даёт live-дельту. Excellent-класс включает обманки «?» для анти-спама.
+    course = generateCourse(707, 'excellent', { forceTypes: [
+      'jump', 'weave', 'jump', 'tire', 'jump', 'tunnel', 'jump',
+    ] });
+    course.name = '✨ Демо S1 · Game Feel';
   } else if (app.testDrive) {
     // Тест-драйв V4 (?test=v4): все новые механики на одной трассе по порядку —
     // шина double-tap, чарж, серпантин, groove-слалом, стол «Замри», тройной
@@ -652,7 +662,9 @@ function startRun() {
   if (app.testDrive) {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
     app.run.ghost = { name: 'Эйва', k: 1.05, time: app.run.sct * 1.05, look: 'aussie' };
-    app.run.startLine = 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
+    app.run.startLine = TEST_MODE === 's1'
+      ? 'Демо Game Feel! Слушай слалом, лови ×2 риск, смотри дельту призрака.'
+      : 'Тест-драйв! Пробуем всё новое: шину, заряд, серпантин, ритм-слалом, стол и тройной!';
   } else if (isBossStage() || app.bossChallenge) {
     const bcls = app.bossChallenge || app.cls;
     const boss = bossFor(bcls);
@@ -1758,14 +1770,57 @@ function drawApproachHint(ctx, type, cx, cy, z) {
   ctx.restore();
 }
 
+// Легенда демо S1: на старте — панель «что пробовать», в беге — компактная строка.
+const DEMO_LINES = [
+  '👂 Слалом: слушай, как perfect идёт вверх по нотам',
+  '💥 Идеальный прыжок — собака «пружинит» + удар кадра',
+  '🔢 Под оценкой — дельта тайминга «+12 мс»',
+  '👻 Обгоняй Эйву: «−0.4с» зелёным = ты быстрее',
+  '⚡ SHIFT (тап по хендлеру) до прыжка — риск ×2',
+  '❓ Не тапай обманку заранее — окно сузится',
+  '🏅 На финише — медаль Тренера (цель по времени)',
+  '📳 На телефоне — вибрация; ⟳ R — мгновенный рестарт',
+];
+function drawDemoLegend(run, z) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  ctx.save();
+  ctx.textAlign = 'left';
+  if (run.phase === 'countdown') {
+    // Полная легенда поверх старта
+    const pw = Math.min(560 * z, w * 0.92), lh = 30 * z;
+    const ph = 70 * z + DEMO_LINES.length * lh;
+    const px = w / 2 - pw / 2, py = h * 0.5 - ph / 2;
+    ctx.fillStyle = 'rgba(8,16,12,0.9)';
+    ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 14 * z); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffd54a'; ctx.textAlign = 'center';
+    ctx.font = `900 ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('✨ Демо «Game Feel» — новинки', w / 2, py + 34 * z);
+    ctx.textAlign = 'left';
+    ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#e8f5ec';
+    DEMO_LINES.forEach((s, i) => ctx.fillText(s, px + 24 * z, py + 66 * z + i * lh));
+  } else if (run.phase === 'running') {
+    // Компактная бегущая подсказка сверху
+    const i = Math.floor(run.time / 3.2) % DEMO_LINES.length;
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center';
+    const s = DEMO_LINES[i];
+    const tw = ctx.measureText(s).width;
+    ctx.fillStyle = 'rgba(8,16,12,0.72)';
+    ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2 - 12 * z, h * 0.135, tw + 24 * z, 24 * z, 8 * z); ctx.fill();
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(s, w / 2, h * 0.135 + 16 * z);
+  }
+  ctx.restore();
+}
+
 // Цветовая грамматика телеграфов (S1.10) — единый язык через все снаряды:
 //   жёлтый  #ffd54a — «держи/отпускай здесь» (perfect-кольцо, зона hold-release,
 //                     сектор заряда, счёт стола) и идеальный тайминг;
-//   зелёная #69f0ae — good-окно и сигнал действия GO (традиция светофора: «жми»);
+//   зелёная #69f0ae — good-окно и сигнал GO (традиция светофора: «жми»);
 //   голубой #8fd8ff/#4fc3f7 — «тапай» (апекс шины, прогресс заряда, шкала контакта);
 //   красный #ff6b6b/#ff8a8a — «не то / жди / промах» (обманка «?», отставание, miss).
-// Аудит V5: грамматика уже консистентна; единственное осознанное исключение —
-// GO зелёный, а не голубой, ради узнаваемости «зелёный = действуй».
 function drawQte(run, m, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const def = m.qte.def, q = m.qte;
@@ -2705,6 +2760,7 @@ function frame(now) {
     app.run.draw();
     drawHud(app.run);
     const z = Math.min(canvas.width, canvas.height) / 700;
+    if (app.testDrive && TEST_MODE === 's1') drawDemoLegend(app.run, z);
     if (app.run.phase === 'finished' && app.run.finishT > 0.4 && !app.run.warmup) {
       app.state = 'results';
     }
