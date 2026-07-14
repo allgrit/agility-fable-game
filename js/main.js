@@ -113,7 +113,11 @@ function playerName() {
 function submitOnline(points, time) {
   if (!telemetryEnabled()) return; // тесты/харнесс не шлют реальные результаты на прод
   const r = submitScore(playerName(), points, time);
-  if (r && r.then) r.then((res) => { if (res && res.rank) app.onlineRank = res.rank; });
+  if (r && r.then) r.then((res) => {
+    if (res && res.rank) app.onlineRank = res.rank;
+    track('leaderboard_submit', { score: Math.floor(points), rank: (res && res.rank) || 0,
+      nickname_set: !!localStorage.getItem('agility_player') });
+  });
 }
 // Онлайн-топ для экрана лидерборда: тянем при открытии, кэшируем в app.
 function refreshOnlineTop() {
@@ -217,6 +221,7 @@ const meta = loadMeta();
   saveMeta(meta);
 }
 function openChloe() {
+  track('diary_click', { from: app.state });
   audio.click();
   window.open(CHLOE_URL, '_blank', 'noopener');
 }
@@ -1161,6 +1166,7 @@ function handleShopTap(p) {
       meta.bones -= FREEZE_COST;
       meta.streak.freezes = (meta.streak.freezes || 0) + 1;
       saveMeta(meta);
+      track('freeze_buy', { cost: FREEZE_COST, total: meta.streak.freezes });
       toasts.push({ icon: '🧊', name: 'Заначка куплена!', desc: 'Спасёт стрик при пропуске дня', t: 0 });
       audio.good();
     } else {
@@ -1192,11 +1198,13 @@ function handleShopTap(p) {
         if (pr.rosettes && !pr.bones) {
           if (meta.rosettes >= pr.rosettes) {
             meta.rosettes -= pr.rosettes; meta.owned[it.id] = 1;
+            track('cosmetic_buy', { item: it.id, slot: it.slot, rarity: it.rarity, currency: 'rosettes', cost: pr.rosettes });
             toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
             audio.perfect();
           } else { toasts.push({ icon: '🏵️', name: 'Не хватает розеток', desc: `Нужно ${pr.rosettes}`, t: 0 }); audio.miss(); }
         } else if (meta.bones >= bonesCost) {
           meta.bones -= bonesCost; meta.owned[it.id] = 1;
+          track('cosmetic_buy', { item: it.id, slot: it.slot, rarity: it.rarity, currency: 'bones', cost: bonesCost, sale });
           toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
           audio.perfect();
         } else { toasts.push({ icon: '🦴', name: 'Не хватает косточек', desc: `Нужно ${bonesCost}`, t: 0 }); audio.miss(); }
@@ -2535,6 +2543,7 @@ function drawResults(run, z) {
           breedName: run.breed.name, cls: run.bossCls };
         applyBossVictory(run.bossCls);
         run.finishLine = pickLine('bossWin');
+        track('boss_win', { boss: run.bossCls, name: bossFor(run.bossCls).name, time: +run.time.toFixed(2) });
         audio.fanfare();
       } else {
         run.finishLine = pickLine('bossLose');
@@ -2549,6 +2558,7 @@ function drawResults(run, z) {
     });
     for (const a of newly) {
       toasts.push({ icon: a.icon, name: a.name, desc: a.desc, t: 0 });
+      track('achievement_unlock', { id: a.id });
       audio.fanfare();
     }
     if (app.result.points > app.bestPoints) {
@@ -2562,6 +2572,8 @@ function drawResults(run, z) {
       track('run_end', { run_id: app._runId, points: app.result.points, time: +run.time.toFixed(2),
         faults: app.result.totalFaults, stars: app.result.stars, clean: !!app.result.clean,
         qualified: !!app.result.qualified, eliminated: !!run.eliminated,
+        perfects: run.score.perfects, max_combo: run.score.maxCombo,
+        risks: run.focus?.used || 0, golden: !!run.goldenWeave,
         obstacles: run.marks.length, mode: app.mode, cls: app.cls, breed: run.breed.name });
       if (app.result.points > 0) submitOnline(app.result.points, run.time);
     }
@@ -2616,6 +2628,7 @@ function drawResults(run, z) {
       ros += rosettesForLevels(meta, breedId, xp.levelsUp);
       for (const L of xp.levelsUp) {
         const tag = titleFor(L);
+        track('level_up', { breed: breedId, level: L, title: tag || '' });
         toasts.push({ icon: '🐕', name: `Уровень ${L}!`, desc: tag ? `Новый титул: ${tag}` : `${breedList[app.breedIdx].name} растёт`, t: 0 });
       }
       // Задания
@@ -2632,7 +2645,7 @@ function drawResults(run, z) {
       };
       const doneNow = applyRunToQuests(meta, ev);
       const claimed = claimDone(meta);
-      for (const dq of doneNow) toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 });
+      for (const dq of doneNow) { track('quest_complete', { id: dq.id, bones: dq.bones || 0 }); toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 }); }
       app.lastEarn = { bones: earned.bones + (claimed.bones || 0), detail: earned.detail,
         rosettes: ros + (claimed.rosettes || 0), xp: xp.gained, breedId };
       saveMeta(meta);
@@ -2895,10 +2908,22 @@ function shareResult() {
 
 // ---------- ЦИКЛ ----------
 let last = performance.now();
+// Фанел экранов: одним хуком ловим menu_shown и открытия вкладок
+// (board/shop/quests/settings/results/champion/news/trainer/calib) → screen_open.
+let _prevScreen = null;
+function trackScreen() {
+  if (app.state === _prevScreen) return;
+  _prevScreen = app.state;
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'results', 'champion', 'news', 'trainer', 'calib'].includes(app.state)) {
+    track('screen_open', { screen: app.state, mode: app.mode });
+  }
+}
+
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   app.t += dt;
+  trackScreen();
 
   if (['menu', 'board', 'shop', 'quests', 'settings'].includes(app.state)) {
     audio.music?.setState('menu');
@@ -2936,6 +2961,10 @@ function frame(now) {
     for (const e of app.run.drainEvents()) {
       // события уже озвучены внутри Run; здесь место для метрик/отладки
       if (window.__agilityEvents) window.__agilityEvents.push(e);
+      // Аналитика редких ключевых моментов в забеге
+      if (e.type === 'goldenWeave') { app.run.goldenWeave = true; track('golden_weave', { cls: app.cls }); }
+      else if (e.type === 'risk') track('risk_arm', { cls: app.cls });
+      else if (e.type === 'weaveRestart') track('weave_restart', { cls: app.cls });
     }
   }
   requestAnimationFrame(frame);

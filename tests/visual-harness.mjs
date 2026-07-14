@@ -26,7 +26,7 @@ const BASE = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const context = await browser.newContext({ viewport: { width: 1280, height: 760 } });
 const page = await context.newPage();
-await page.goto(BASE + '/');
+await page.goto(BASE + '/?noanalytics');
 await page.waitForFunction(() => !!window.__agility);
 
 // Единый раннер: стартует прогон и крутит до предиката, потом замораживает.
