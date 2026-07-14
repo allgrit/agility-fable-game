@@ -1,7 +1,7 @@
 // Service worker: network-first — каждый заход тянет свежие файлы с сервера
 // (обходя HTTP-кеш браузера), офлайн-фолбэк из кеша. Любой деплой виден
 // клиентам при следующей загрузке страницы без ручной очистки кеша.
-const BUILD = 'build-2026-07-14-1-sdk-analytics';
+const BUILD = 'build-2026-07-15-1-qte-metrics';
 
 self.addEventListener('install', () => self.skipWaiting());
 
