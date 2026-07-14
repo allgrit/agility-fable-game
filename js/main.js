@@ -2569,12 +2569,24 @@ function drawResults(run, z) {
 
     // Аналитика + онлайн-лидерборд (кроме разминки и тест-драйва).
     if (!run.warmup && !app.testDrive) {
+      // Успешность по КАЖДОМУ типу снаряда: seen/perfect/clean(good+late)/fault(miss)
+      // → дашборд «Чистота снарядов» показывает, где игроки сыплются по механике.
+      const obStats = {};
+      for (const m of run.marks) {
+        const g = m.qte?.result?.grade;
+        const a = obStats[m.o.type] || (obStats[m.o.type] = { seen: 0, perfect: 0, clean: 0, fault: 0 });
+        a.seen++;
+        if (g === 'perfect') a.perfect++;
+        else if (g === 'good' || g === 'late') a.clean++;
+        else if (g === 'miss') a.fault++;
+      }
       track('run_end', { run_id: app._runId, points: app.result.points, time: +run.time.toFixed(2),
         faults: app.result.totalFaults, stars: app.result.stars, clean: !!app.result.clean,
         qualified: !!app.result.qualified, eliminated: !!run.eliminated,
         perfects: run.score.perfects, max_combo: run.score.maxCombo,
         risks: run.focus?.used || 0, golden: !!run.goldenWeave,
-        obstacles: run.marks.length, mode: app.mode, cls: app.cls, breed: run.breed.name });
+        obstacles: obStats, obstacle_count: run.marks.length,
+        mode: app.mode, cls: app.cls, breed: run.breed.name });
       if (app.result.points > 0) submitOnline(app.result.points, run.time);
     }
 
