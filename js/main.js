@@ -16,6 +16,10 @@ import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.j
 import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
 import { setHapticsEnabled } from './haptics.js';
 import { updateCalibration } from './calibrate.js';
+// Fable Arcade SDK: аналитика игроков + онлайн-лидерборд (общий бэкенд по game-id).
+import { SDK } from '../sdk/config.js';
+import { track, telemetryEnabled } from '../sdk/analytics.js';
+import { submitScore, fetchTop } from '../sdk/leaderboard.js';
 
 // Service worker: свежая версия при каждом деплое без ручной очистки кеша.
 // При смене контролирующего SW (не первой установке) — тихая перезагрузка.
@@ -30,6 +34,12 @@ if ('serviceWorker' in navigator &&
     location.reload();
   });
 }
+
+// Аналитика: загрузка игры (даёт распределение по версиям и работу автообновления).
+track('game_loaded', {
+  device: (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) ? 'touch' : 'desktop',
+  w: window.innerWidth, h: window.innerHeight,
+});
 
 const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
@@ -87,6 +97,35 @@ function saveRunToBoard(run, res) {
 function saveProgress() {
   localStorage.setItem('agility_class', app.cls);
   localStorage.setItem('agility_stage', String(app.stage));
+}
+
+// ---------- ОНЛАЙН-ЛИДЕРБОРД (Fable Arcade SDK) ----------
+// Имя игрока для онлайн-топа: спрашиваем один раз при первой отправке, дальше помним.
+function playerName() {
+  let n = localStorage.getItem('agility_player');
+  if (!n) {
+    try { n = (window.prompt('Имя для онлайн-рейтинга (видно всем):', '') || '').trim(); } catch { n = ''; }
+    n = (n || 'Аноним').slice(0, 24);
+    localStorage.setItem('agility_player', n);
+  }
+  return n;
+}
+function submitOnline(points, time) {
+  if (!telemetryEnabled()) return; // тесты/харнесс не шлют реальные результаты на прод
+  const r = submitScore(playerName(), points, time);
+  if (r && r.then) r.then((res) => {
+    if (res && res.rank) app.onlineRank = res.rank;
+    track('leaderboard_submit', { score: Math.floor(points), rank: (res && res.rank) || 0,
+      nickname_set: !!localStorage.getItem('agility_player') });
+  });
+}
+// Онлайн-топ для экрана лидерборда: тянем при открытии, кэшируем в app.
+function refreshOnlineTop() {
+  if (!telemetryEnabled()) { app.onlineTop = []; return; }
+  app.onlineTopLoading = true;
+  const p = fetchTop('all', 10);
+  if (p && p.then) p.then((top) => { app.onlineTop = top || []; app.onlineTopLoading = false; })
+    .catch(() => { app.onlineTop = []; app.onlineTopLoading = false; });
 }
 
 // ---------- МОДИФИКАТОРЫ-ИСПЫТАНИЯ (трасса дня) ----------
@@ -182,6 +221,7 @@ const meta = loadMeta();
   saveMeta(meta);
 }
 function openChloe() {
+  track('diary_click', { from: app.state });
   audio.click();
   window.open(CHLOE_URL, '_blank', 'noopener');
 }
@@ -682,6 +722,10 @@ function startRun() {
   app.state = 'run';
   app.result = null;
   audio.crowdLevel(0.15);
+  // Аналитика: старт забега (run_id связывает старт с исходом).
+  app._runId = String(Date.now()) + '-' + (app._runN = (app._runN || 0) + 1);
+  track('run_start', { run_id: app._runId, mode: app.mode, cls: app.cls, stage: app.stage,
+    breed: breed.id, course: course.name });
 }
 
 // Онбординг: «Двор» — jump, jump, tunnel с гигантскими окнами; miss = мягкий повтор.
@@ -1122,6 +1166,7 @@ function handleShopTap(p) {
       meta.bones -= FREEZE_COST;
       meta.streak.freezes = (meta.streak.freezes || 0) + 1;
       saveMeta(meta);
+      track('freeze_buy', { cost: FREEZE_COST, total: meta.streak.freezes });
       toasts.push({ icon: '🧊', name: 'Заначка куплена!', desc: 'Спасёт стрик при пропуске дня', t: 0 });
       audio.good();
     } else {
@@ -1153,11 +1198,13 @@ function handleShopTap(p) {
         if (pr.rosettes && !pr.bones) {
           if (meta.rosettes >= pr.rosettes) {
             meta.rosettes -= pr.rosettes; meta.owned[it.id] = 1;
+            track('cosmetic_buy', { item: it.id, slot: it.slot, rarity: it.rarity, currency: 'rosettes', cost: pr.rosettes });
             toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
             audio.perfect();
           } else { toasts.push({ icon: '🏵️', name: 'Не хватает розеток', desc: `Нужно ${pr.rosettes}`, t: 0 }); audio.miss(); }
         } else if (meta.bones >= bonesCost) {
           meta.bones -= bonesCost; meta.owned[it.id] = 1;
+          track('cosmetic_buy', { item: it.id, slot: it.slot, rarity: it.rarity, currency: 'bones', cost: bonesCost, sale });
           toasts.push({ icon: '🛍', name: 'Куплено!', desc: it.name, t: 0 });
           audio.perfect();
         } else { toasts.push({ icon: '🦴', name: 'Не хватает косточек', desc: `Нужно ${bonesCost}`, t: 0 }); audio.miss(); }
@@ -1601,7 +1648,18 @@ function drawBoard() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffd54a';
   ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
-  ctx.fillText('🏆 ЛУЧШИЕ ПРОГОНЫ', w / 2, py + 44 * z);
+  ctx.fillText('🏆 ЛУЧШИЕ ПРОГОНЫ', w / 2, py + 40 * z);
+
+  // Онлайн-топ (Fable Arcade): компактная строка мировых лидеров + твой ранг.
+  if (app.onlineTop === undefined && !app.onlineTopLoading) refreshOnlineTop();
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#8fd8ff';
+  let ol = '🌐 ';
+  if (app.onlineTopLoading || app.onlineTop === undefined) ol += 'загрузка онлайн-топа…';
+  else if (!app.onlineTop.length) ol += 'онлайн-топ пуст — будь первым!';
+  else ol += app.onlineTop.slice(0, 3).map((e, i) => `${i + 1}. ${e.name} ${e.score}`).join('   ·   ');
+  if (app.onlineRank) ol += `    (ты #${app.onlineRank})`;
+  ctx.fillText(ol.length > 74 ? ol.slice(0, 73) + '…' : ol, w / 2, py + 62 * z);
 
   if (!board.length) {
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
@@ -2108,6 +2166,13 @@ function drawMenu(dt) {
   ctx.fillRect(0, 0, w, h);
 
   const z = Math.min(w, h) / 700;
+  // Версия сборки (Fable Arcade SDK): левый нижний угол — видно, обновилась ли игра.
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.fillText(SDK.VERSION, 12 * z, h - 10 * z);
+  ctx.restore();
   ctx.save();
   ctx.textAlign = 'center';
   ctx.font = `900 ${Math.round(64 * z)}px "Segoe UI", sans-serif`;
@@ -2478,6 +2543,7 @@ function drawResults(run, z) {
           breedName: run.breed.name, cls: run.bossCls };
         applyBossVictory(run.bossCls);
         run.finishLine = pickLine('bossWin');
+        track('boss_win', { boss: run.bossCls, name: bossFor(run.bossCls).name, time: +run.time.toFixed(2) });
         audio.fanfare();
       } else {
         run.finishLine = pickLine('bossLose');
@@ -2492,6 +2558,7 @@ function drawResults(run, z) {
     });
     for (const a of newly) {
       toasts.push({ icon: a.icon, name: a.name, desc: a.desc, t: 0 });
+      track('achievement_unlock', { id: a.id });
       audio.fanfare();
     }
     if (app.result.points > app.bestPoints) {
@@ -2499,6 +2566,17 @@ function drawResults(run, z) {
       localStorage.setItem('agility_best', String(app.bestPoints));
     }
     saveRunToBoard(run, app.result);
+
+    // Аналитика + онлайн-лидерборд (кроме разминки и тест-драйва).
+    if (!run.warmup && !app.testDrive) {
+      track('run_end', { run_id: app._runId, points: app.result.points, time: +run.time.toFixed(2),
+        faults: app.result.totalFaults, stars: app.result.stars, clean: !!app.result.clean,
+        qualified: !!app.result.qualified, eliminated: !!run.eliminated,
+        perfects: run.score.perfects, max_combo: run.score.maxCombo,
+        risks: run.focus?.used || 0, golden: !!run.goldenWeave,
+        obstacles: run.marks.length, mode: app.mode, cls: app.cls, breed: run.breed.name });
+      if (app.result.points > 0) submitOnline(app.result.points, run.time);
+    }
 
     // ---- V2 Мета: перфект-челлендж (4-я звезда), валюты, XP, задания ----
     if (!run.warmup) {
@@ -2550,6 +2628,7 @@ function drawResults(run, z) {
       ros += rosettesForLevels(meta, breedId, xp.levelsUp);
       for (const L of xp.levelsUp) {
         const tag = titleFor(L);
+        track('level_up', { breed: breedId, level: L, title: tag || '' });
         toasts.push({ icon: '🐕', name: `Уровень ${L}!`, desc: tag ? `Новый титул: ${tag}` : `${breedList[app.breedIdx].name} растёт`, t: 0 });
       }
       // Задания
@@ -2566,7 +2645,7 @@ function drawResults(run, z) {
       };
       const doneNow = applyRunToQuests(meta, ev);
       const claimed = claimDone(meta);
-      for (const dq of doneNow) toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 });
+      for (const dq of doneNow) { track('quest_complete', { id: dq.id, bones: dq.bones || 0 }); toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 }); }
       app.lastEarn = { bones: earned.bones + (claimed.bones || 0), detail: earned.detail,
         rosettes: ros + (claimed.rosettes || 0), xp: xp.gained, breedId };
       saveMeta(meta);
@@ -2829,10 +2908,22 @@ function shareResult() {
 
 // ---------- ЦИКЛ ----------
 let last = performance.now();
+// Фанел экранов: одним хуком ловим menu_shown и открытия вкладок
+// (board/shop/quests/settings/results/champion/news/trainer/calib) → screen_open.
+let _prevScreen = null;
+function trackScreen() {
+  if (app.state === _prevScreen) return;
+  _prevScreen = app.state;
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'results', 'champion', 'news', 'trainer', 'calib'].includes(app.state)) {
+    track('screen_open', { screen: app.state, mode: app.mode });
+  }
+}
+
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   app.t += dt;
+  trackScreen();
 
   if (['menu', 'board', 'shop', 'quests', 'settings'].includes(app.state)) {
     audio.music?.setState('menu');
@@ -2870,6 +2961,10 @@ function frame(now) {
     for (const e of app.run.drainEvents()) {
       // события уже озвучены внутри Run; здесь место для метрик/отладки
       if (window.__agilityEvents) window.__agilityEvents.push(e);
+      // Аналитика редких ключевых моментов в забеге
+      if (e.type === 'goldenWeave') { app.run.goldenWeave = true; track('golden_weave', { cls: app.cls }); }
+      else if (e.type === 'risk') track('risk_arm', { cls: app.cls });
+      else if (e.type === 'weaveRestart') track('weave_restart', { cls: app.cls });
     }
   }
   requestAnimationFrame(frame);

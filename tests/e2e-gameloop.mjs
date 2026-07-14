@@ -92,7 +92,7 @@ const page = await context.newPage();
 const consoleErrors = [];
 page.on('pageerror', e => consoleErrors.push(String(e)));
 page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
-await page.goto(BASE + '/');
+await page.goto(BASE + '/?noanalytics');
 await page.waitForFunction(() => !!window.__agility);
 
 // ============================================================

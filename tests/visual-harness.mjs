@@ -26,7 +26,7 @@ const BASE = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const context = await browser.newContext({ viewport: { width: 1280, height: 760 } });
 const page = await context.newPage();
-await page.goto(BASE + '/');
+await page.goto(BASE + '/?noanalytics');
 await page.waitForFunction(() => !!window.__agility);
 
 // Единый раннер: стартует прогон и крутит до предиката, потом замораживает.
@@ -336,6 +336,18 @@ const SCREENS = [
       A.app.state = 'settings';
     })()`,
     criteria: 'Настройки: тумблеры Тряска/Колорблайнд/Вибрация (тач), слайдеры Музыка/Звуки, кнопки Калибровка/Тренировка — всё в панели без наложения.',
+  },
+  {
+    name: '34-board-online',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      // Подставляем онлайн-топ (Fable Arcade SDK), чтобы проверить отрисовку строки.
+      A.app.onlineTop = [{ name: 'Хлоя', score: 2450 }, { name: 'Рекс', score: 2100 }, { name: 'Джек', score: 1980 }];
+      A.app.onlineRank = 7;
+      A.app.state = 'board';
+    })()`,
+    criteria: 'Экран лидерборда: под заголовком «🏆 ЛУЧШИЕ ПРОГОНЫ» голубая строка онлайн-топа вида «🌐 1. Хлоя 2450 · 2. Рекс 2100 · 3. Джек 1980 (ты #7)», ниже локальная таблица и достижения — без наложения.',
   },
 ];
 for (const sc of SCREENS) {
