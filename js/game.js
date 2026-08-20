@@ -3,6 +3,7 @@ import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
 import { computeSct, BREEDS } from './scoring.js';
 import { haptic } from './haptics.js';
+import { Commentator } from './soul.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
@@ -23,8 +24,13 @@ export const HINTS = {
 };
 
 export class Run {
-  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1, audioOffset = 0 }) {
+  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1,
+    audioOffset = 0, dogName = null, bestTime = null }) {
     this.audioOffset = audioOffset; // калибровка задержки звука для groove (сек)
+    // S3: комментатор ринга — «радио-строка» трансляции по триггерам забега
+    this.dogName = dogName || breed.name;
+    this.bestTime = bestTime;       // личный рекорд трассы: питает реплику «рекорд ринга»
+    this.commentator = new Commentator();
     this.bonusPoints = 0;           // событийные бонусы очков (Golden Weave и т.п.)
     this.course = course;
     this.breed = breed;
@@ -90,8 +96,16 @@ export class Run {
     m.qte.w *= 0.35; // окно сжимается до 35% ширины (симметрично вокруг цели)
     this.popups.push({ text: '⚡ РИСК ×2!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
     this.audio.reveal();
+    this.say('risk');
     this.emit({ type: 'risk' });
     return true;
+  }
+
+  // Реплика комментатора: сам решает, звучать ли (кулдаун/приоритет внутри).
+  say(trigger, ctx = {}) {
+    const line = this.commentator.say(trigger, { dog: this.dogName, ...ctx });
+    if (line) this.emit({ type: 'commentary', trigger, text: line });
+    return line;
   }
 
   emit(e) { this.events.push(e); }
@@ -159,6 +173,7 @@ export class Run {
     if (this.hitstop > 0) { this.hitstop -= rawDt; dt *= 0.15; }
     if (this.hintSlow > 0) { this.hintSlow -= rawDt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
     if (this.slowmoT > 0) { this.slowmoT -= rawDt; dt *= 0.5; }
+    this.commentator.update(rawDt);
     if (this.desatT > 0) this.desatT -= dt;
     if (this.flashT > 0) this.flashT -= rawDt;
     this.time += this.phase === 'running' ? dt : 0;
@@ -174,6 +189,7 @@ export class Run {
         this.audio.whistle();
         this.audio.crowdLevel(0.3);
         this.audio.music?.setState('run');
+        this.say('start');
         this.emit({ type: 'go' });
       }
     }
@@ -272,6 +288,7 @@ export class Run {
     // Финишный спурт активируется, когда все снаряды пройдены
     if (!this.sprint.active && this.marks.every(mm => mm.resolved) && this.phase === 'running') {
       this.sprint.active = true;
+      this.say('sprint');
       this.emit({ type: 'sprint' });
     }
     if (this.sprint.active) this.sprint.boost = Math.max(0, this.sprint.boost - dt * 0.2);
@@ -357,6 +374,7 @@ export class Run {
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
       this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
+      this.say(clean ? 'finishClean' : 'finishFault', { t: this.time.toFixed(2) });
       this.emit({ type: 'finish' });
     }
   }
@@ -464,6 +482,7 @@ export class Run {
           this.r.zoomPunch();
           haptic('golden');
           this.audio.fanfare();
+          this.say('golden');
           this.emit({ type: 'goldenWeave' });
           break;
         }
@@ -604,6 +623,7 @@ export class Run {
       this.emit({ type: 'fault', faults });
     }
     this.emit({ type: 'grade', grade });
+    this._comment(m, grade);
     this.audio.music?.setIntensity(Math.floor(this.score.combo));
 
     // Micro-slow-mo на последнем снаряде перед спуртом
@@ -612,6 +632,37 @@ export class Run {
 
     // Эффект прохождения снаряда
     this._passEffects(m, grade);
+  }
+
+  // Что скажет комментатор после снаряда: сначала драма (штраф/отказ),
+  // потом темп против призрака/рекорда, потом «фон» — чистая зона и техника.
+  _comment(m, grade) {
+    const done = this.marks.filter(mm => mm.resolved).length;
+    if (grade === 'miss') {
+      this.say(this.score.refusals && m.refusalT > 0 ? 'refusal' : 'fault');
+      return;
+    }
+    if (this.ghost && this.ghost.time > 0 && done % 3 === 0) {
+      const lead = (m.entryD / this.path.length) * this.ghost.time - this.time;
+      this.say(lead >= 0 ? 'ghostAhead' : 'ghostBehind',
+        { ghost: this.ghost.name, t: Math.abs(lead).toFixed(1) });
+      return;
+    }
+    // Темп рекорда: прогноз финиша по текущей доле пути бьёт личный рекорд трассы
+    if (this.bestTime && done >= 3 && !this._saidRecord) {
+      const frac = this.dog.dist / this.path.length;
+      if (frac > 0.35 && this.time / frac < this.bestTime * 0.97) {
+        this._saidRecord = true;
+        this.say('record');
+        return;
+      }
+    }
+    if (grade === 'perfect') {
+      if (m.o.type === 'weave') { this.say('weave'); return; }
+      if (['aframe', 'dogwalk', 'seesaw'].includes(m.o.type)) { this.say('contact'); return; }
+      if (this.score.combo >= 3) { this.say('streak', { n: Math.floor(this.score.combo) }); return; }
+    }
+    if (this.score.faults === 0 && done >= 3 && done % 3 === 0) this.say('cleanZone', { n: done });
   }
 
   _passEffects(m, grade) {

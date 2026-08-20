@@ -15,6 +15,8 @@ import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip
 import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
 import { SEASONS, BOSSES, bossFor, pickLine, startLineFor, newspaperFor } from './career.js';
 import { setHapticsEnabled } from './haptics.js';
+import { dogName, temperamentFor, favoriteObstacle, recordObstacleStats, recordBestTime,
+  IdleMachine, OBSTACLE_NAMES } from './soul.js';
 import { updateCalibration } from './calibrate.js';
 // Fable Arcade SDK: аналитика игроков + онлайн-лидерборд (общий бэкенд по game-id).
 import { SDK } from '../sdk/config.js';
@@ -697,7 +699,10 @@ function startRun() {
   const ngMul = meta.ngplusUnlocked && settings.ngplus ? 0.85 : 1;
   app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
     modifier: activeModifier(), windowMul: (mod.windowMul || 1) * ngMul,
-    audioOffset: settings.audioOffset || 0 });
+    audioOffset: settings.audioOffset || 0,
+    // S3: комментатору нужны кличка и личный рекорд трассы («темп рекорда ринга»)
+    dogName: dogName(meta, breed),
+    bestTime: (meta.counters.courseBest || {})[courseKey()] || null });
   app.bossWin = null;
   if (app.testDrive) {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
@@ -835,6 +840,9 @@ function drawHud(run) {
   }
   ctx.restore();
 
+  // Радио-строка комментатора (S3): трансляция ринга по триггерам забега
+  drawCommentary(run, z);
+
   // Ритуал старта: тишина, стойка, «На старт…» — затем взрывное «ВПЕРЁД!»
   if (run.phase === 'countdown' || (run.phase === 'running' && run.time < 0.6)) {
     ctx.save();
@@ -928,6 +936,40 @@ function drawHud(run) {
   }
 
   if (IS_TOUCH) drawTouchControls(run);
+}
+
+// Комментатор ринга (S3.4): одна строка «радио-трансляции» под шапкой HUD.
+// Появляется с проездом слева, живёт 2.5–4.5с, гаснет — не спорит с QTE внизу.
+function drawCommentary(run, z) {
+  const line = run.commentator?.line;
+  if (!line) return;
+  const ctx = renderer.ctx, w = canvas.width;
+  const inK = Math.min(1, line.t / 0.25);
+  const outK = Math.min(1, Math.max(0, (line.life - line.t) / 0.4));
+  const y = (isPortrait() ? 168 : 72) * z;
+  ctx.save();
+  ctx.globalAlpha = Math.min(inK, outK);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  let fs = Math.round((isPortrait() ? 14 : 16) * z);
+  ctx.font = `italic ${fs}px "Segoe UI", sans-serif`;
+  const maxW = w * (isPortrait() ? 0.9 : 0.62);
+  let txt = line.text;
+  while (ctx.measureText(txt).width > maxW - 44 * z && txt.length > 12) txt = txt.slice(0, -2);
+  if (txt !== line.text) txt += '…';
+  const tw = ctx.measureText(txt).width;
+  const pw2 = tw + 46 * z, ph2 = 28 * z;
+  const px2 = w / 2 - pw2 / 2 + (1 - inK) * -20 * z;
+  ctx.fillStyle = 'rgba(8,16,12,0.78)';
+  ctx.strokeStyle = 'rgba(143,216,255,0.45)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(px2, y - ph2 / 2, pw2, ph2, ph2 / 2); ctx.fill(); ctx.stroke();
+  ctx.font = `${Math.round(fs * 0.95)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#8fd8ff';
+  ctx.fillText('🎙', px2 + 12 * z, y + 1);
+  ctx.font = `italic ${fs}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#dff0ff';
+  ctx.fillText(txt, px2 + 36 * z, y + 1);
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
 }
 
 function expectedKey(run) {
@@ -2605,6 +2647,14 @@ function drawResults(run, z) {
         meta.counters.runsToday = { day: dkey, n: 0 };
       }
       meta.counters.runsToday.n += 1;
+      // S3-досье: статистика по типам снарядов, личный рекорд собаки и трассы.
+      // Рекорд трассы питает реплику комментатора «темп рекорда ринга».
+      recordObstacleStats(meta, run.marks);
+      recordBestTime(meta, breedList[app.breedIdx].id, run.time, res0.clean);
+      if (res0.clean) {
+        const cb = meta.counters.courseBest || (meta.counters.courseBest = {});
+        if (cb[trackId] == null || run.time < cb[trackId]) cb[trackId] = +run.time.toFixed(2);
+      }
       const earned = earnFromRun(meta, {
         points: res0.points, stars: Math.min(3, res0.stars), trackId,
         isDaily: app.mode === 'daily', todayStr: todayStr(),

@@ -256,6 +256,12 @@ const SCENES = [
     predicate: "m && m.decoys && m.decoys.revealed && m.qte.state==='active'",
     criteria: 'Обманка раскрыта: крупная надпись «ЖМИ!» + кейкап настоящей клавиши (может быть НЕ ПРОБЕЛ — ←/↑/↓). Обманки теперь настоящие и редкие.',
   },
+  // ---- S3 «Душа собаки» ----
+  {
+    name: '35-commentary', mode: 'career', cls: 'open', stage: 2,
+    predicate: "run.commentator.line && run.commentator.line.t > 0.5 && run.commentator.line.t < 1.4 && run.marks.some(x=>x.resolved)",
+    criteria: 'Комментатор ринга: под шапкой HUD голубая пилюля с иконкой 🎙 и курсивной репликой трансляции (например «Чисто! Пока ни одной планки на траве.»). Строка не наезжает на панели времени/фолтов и на QTE внизу.',
+  },
 ];
 
 const manifest = [];
