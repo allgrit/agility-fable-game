@@ -199,6 +199,9 @@ function medalCounts() {
 const breedList = Object.values(BREEDS);
 const breedLocked = (b) => b.unlockAch && !hasAch(b.unlockAch);
 const toasts = []; // {icon, name, desc, t}
+// S3.2: собака живёт в меню — автомат выходок (чешется/зевает/гоняется за хвостом),
+// сон после 30с без ввода, встряхивание при смене породы или окраса.
+const menuIdle = new IdleMachine();
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
 // Настройки (доступность и громкости)
 const settings = (() => {
@@ -316,6 +319,7 @@ function toggleFullscreen() {
   else document.documentElement.requestFullscreen().catch(() => {});
 }
 window.addEventListener('keydown', (e) => {
+  app.lastInputT = app.t; // S3.2: собака в меню засыпает без ввода
   if (KEYS.includes(e.code)) e.preventDefault();
   if (e.repeat) return;
   audio.ensure();
@@ -385,6 +389,7 @@ canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (e) => {
+  app.lastInputT = app.t;
   audio.ensure();
   const p = evXY(e);
   const mz = muteZone();
@@ -531,8 +536,8 @@ canvas.addEventListener('pointerup', releaseTouch);
 canvas.addEventListener('pointercancel', releaseTouch);
 
 function menuKey(code) {
-  if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); }
-  if (code === 'ArrowRight') { app.breedIdx = (app.breedIdx + 1) % breedList.length; audio.click(); }
+  if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); menuIdle.set('shake'); }
+  if (code === 'ArrowRight') { app.breedIdx = (app.breedIdx + 1) % breedList.length; audio.click(); menuIdle.set('shake'); }
   if (code === 'ArrowUp' || code === 'ArrowDown') {
     const modes = ['career', 'worldcup', 'daily'];
     const dir = code === 'ArrowUp' ? -1 : 1;
@@ -542,7 +547,7 @@ function menuKey(code) {
   if (code === 'Enter' || code === 'Space') startRun();
   if (code.startsWith('Digit')) {
     const n = +code.slice(5) - 1;
-    if (n >= 0 && n < breedList.length) { app.breedIdx = n; audio.click(); }
+    if (n >= 0 && n < breedList.length) { app.breedIdx = n; audio.click(); menuIdle.set('shake'); }
   }
 }
 
@@ -554,7 +559,7 @@ function menuClick(x, y) {
     for (let i = 0; i < n; i++) {
       const cy = top + i * (cardH + gap);
       if (y > cy && y < cy + cardH && Math.abs(x - w / 2) < w * 0.44) {
-        if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
+        if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); menuIdle.set('shake'); }
         return;
       }
     }
@@ -567,7 +572,7 @@ function menuClick(x, y) {
   for (let i = 0; i < n; i++) {
     const cx = w / 2 + (i - (n - 1) / 2) * (cardW + 14);
     if (Math.abs(x - cx) < cardW / 2 && y > L.cardsTop && y < L.cardsTop + L.cardH) {
-      if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); }
+      if (app.breedIdx === i) startRun(); else { app.breedIdx = i; audio.click(); menuIdle.set('shake'); }
       return;
     }
   }
@@ -1265,6 +1270,7 @@ function handleShopTap(p) {
         } else {
           equip[it.slot] = it.id;
           audio.good();
+          menuIdle.set('shake'); // собака отряхивается, примеряя обновку
         }
       } else {
         const dnum = (new Date().getFullYear()) * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate();
@@ -2242,6 +2248,10 @@ function drawMenu(dt) {
   ctx.fillRect(0, 0, w, h);
 
   const z = Math.min(w, h) / 700;
+  // S3.2: idle-жизнь выбранной собаки — выходки по таймеру, сон без ввода
+  menuIdle.favIdle = temperamentFor(breedList[app.breedIdx].id).favIdle;
+  menuIdle.update(dt, { idleSec: app.t - (app.lastInputT ?? app.t) });
+  const idlePose = { state: menuIdle.state, k: menuIdle.progress() };
   // Версия сборки (Fable Arcade SDK): левый нижний угол — видно, обновилась ли игра.
   ctx.save();
   ctx.textAlign = 'left';
@@ -2386,7 +2396,8 @@ function drawMenu(dt) {
       if (locked) ctx.globalAlpha = 0.45;
       ctx.translate(cx - cardW / 2 + cardH * 0.75, cy + cardH * 0.55);
       ctx.scale(1.15, 1.15);
-      drawCardDog(ctx, { runPhase: app.t * (sel ? 8 : 3), happy: sel && !locked }, b, cardH * 0.55);
+      drawCardDog(ctx, { runPhase: app.t * (sel ? 8 : 3), happy: sel && !locked,
+        idle: sel && !locked ? idlePose : null }, b, cardH * 0.55);
       ctx.restore();
       ctx.textAlign = 'left';
       ctx.fillStyle = sel ? '#ffe082' : '#fff';
@@ -2445,7 +2456,8 @@ function drawMenu(dt) {
     // Пёсик на карточке
     const dogY = cy + cardH * 0.36;
     renderer.cam.zoom = 34 * z;
-    const fake = { x: 0, y: 0, heading: -0.1, runPhase: app.t * (sel ? 8 : 3), speed: sel ? 5 : 1, happy: sel && !locked, elevation: 0 };
+    const fake = { x: 0, y: 0, heading: -0.1, runPhase: app.t * (sel ? 8 : 3), speed: sel ? 5 : 1,
+      happy: sel && !locked, elevation: 0, idle: sel && !locked ? idlePose : null };
     ctx.save();
     if (locked) ctx.globalAlpha = 0.4;
     ctx.translate(cx, dogY);
@@ -2501,6 +2513,22 @@ function drawCardDog(ctx, dog, breed, zoom) {
   const save = { cam: { ...renderer.cam }, canvas: renderer.canvas };
   ctx.save();
   ctx.scale(zoom / 24, zoom / 24);
+  // S3.2 «Собака живёт в меню»: поза по состоянию idle-автомата
+  const idle = dog.idle || null;
+  const st = idle ? idle.state : 'idle';
+  const k = idle ? idle.k : 0;          // прогресс состояния 0..1
+  const breath = st === 'sleep' ? 1 + Math.sin(app.t * 2.2) * 0.035 : 1;
+  if (st === 'tailChase') {             // гоняется за хвостом: кружится вокруг себя
+    ctx.rotate(Math.sin(k * Math.PI) * k * Math.PI * 3);
+    ctx.scale(0.94, 0.94);
+  } else if (st === 'shake') {          // встряхивается после смены окраса
+    ctx.rotate(Math.sin(k * Math.PI * 14) * 0.13);
+  } else if (st === 'scratch') {        // чешется: корпус кренится к задней лапе
+    ctx.rotate(-0.12 + Math.sin(k * Math.PI * 12) * 0.03);
+  } else if (st === 'sleep') {          // спит: осел на землю, дышит
+    ctx.translate(0, 3.5);
+    ctx.scale(1.06, 0.9 * breath);
+  }
   ctx.fillStyle = breed.body;
   ctx.beginPath(); ctx.ellipse(0, 0, 13, 6.5, 0, 0, Math.PI * 2); ctx.fill();
   if (breed.merle) {
@@ -2541,7 +2569,11 @@ function drawCardDog(ctx, dog, breed, zoom) {
   ctx.beginPath(); ctx.ellipse(18.5, -2.5, 3.4, 2.6, -0.1, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#222';
   ctx.beginPath(); ctx.arc(21, -3, 1.3, 0, Math.PI * 2); ctx.fill();
-  if (breed.eye) {
+  const closedEye = st === 'sleep' || st === 'yawn';
+  if (closedEye) {              // спит или зевает — глаз-дужка
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 0.9; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(15.5, -5.0, 1.5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+  } else if (breed.eye) {
     ctx.fillStyle = breed.eye;
     ctx.beginPath(); ctx.arc(15.5, -5.5, 1.35, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#222';
@@ -2549,20 +2581,61 @@ function drawCardDog(ctx, dog, breed, zoom) {
   } else {
     ctx.beginPath(); ctx.arc(15.5, -5.5, 1.1, 0, Math.PI * 2); ctx.fill();
   }
+  // Зевок: раскрытая пасть тянется по синусоиде состояния
+  if (st === 'yawn') {
+    const open = Math.sin(k * Math.PI) * 3.4;
+    ctx.fillStyle = '#2a1a1a';
+    ctx.beginPath(); ctx.ellipse(19.5, -1.0 + open * 0.3, 2.6, 1.2 + open, -0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e2697d';
+    ctx.beginPath(); ctx.ellipse(19.5, 0.4 + open * 0.5, 1.3, 0.9 + open * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.fillStyle = breed.ear;
   for (const side of [-1, 1]) {
-    ctx.save(); ctx.translate(12, -8); ctx.rotate(-0.6 + side * 0.25);
+    // Во сне уши обвисают, при встряхивании — хлопают
+    const earRot = st === 'sleep' ? 0.5 : st === 'shake' ? Math.sin(k * Math.PI * 14) * 0.5 : 0;
+    ctx.save(); ctx.translate(12, -8); ctx.rotate(-0.6 + side * 0.25 + earRot);
     ctx.beginPath(); ctx.ellipse(0, -3, 1.9, 3.8, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
   }
-  const run = dog.runPhase;
+  // Лапы: в покое/беге шагают, в выходках стоят (кроме чесания задней лапой)
+  const running = st === 'idle' || st === 'tailChase' || st === 'shake';
+  const run = running ? dog.runPhase : 0;
   ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
   for (const [lx, ph] of [[-8, 0], [-8, Math.PI], [8, Math.PI * 0.9], [8, Math.PI * 1.9]]) {
+    // Чешется: одна задняя лапа поднята к уху и частит
+    if (st === 'scratch' && lx === -8 && ph === 0) {
+      const sc = Math.sin(k * Math.PI * 12) * 1.2;
+      ctx.beginPath(); ctx.moveTo(-8, 2); ctx.lineTo(6.5 + sc, -6.5); ctx.stroke();
+      continue;
+    }
+    if (st === 'sleep') { // лежит: лапы поджаты вперёд
+      ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + 4, 5); ctx.stroke();
+      continue;
+    }
     const sw = Math.sin(run + ph) * 0.8;
     ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + Math.sin(sw) * 7, 10); ctx.stroke();
   }
-  if (dog.happy) {
+  if (dog.happy && st !== 'sleep' && st !== 'yawn') {
     ctx.fillStyle = '#e2697d';
     ctx.beginPath(); ctx.ellipse(19, 0.5, 1.5, 2.6, 0.3, 0, Math.PI * 2); ctx.fill();
+  }
+  // Хвост: во сне лежит, в погоне за хвостом задран и мечется
+  ctx.strokeStyle = breed.body; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-13, -3);
+  if (st === 'sleep') ctx.quadraticCurveTo(-18, 1, -20, 4);
+  else if (st === 'tailChase') ctx.quadraticCurveTo(-18, -9, -13, -12);
+  else ctx.quadraticCurveTo(-19, -8, -21, -5 + Math.sin(app.t * (dog.happy ? 18 : 8)) * (dog.happy ? 7 : 3));
+  ctx.stroke();
+  // Сонные «Z-z-z» над головой
+  if (st === 'sleep') {
+    ctx.fillStyle = 'rgba(180,220,255,0.9)';
+    ctx.font = 'bold 7px "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    for (let i = 0; i < 3; i++) {
+      const ph2 = (app.t * 0.6 + i * 0.33) % 1;
+      ctx.globalAlpha = 0.85 * (1 - ph2);
+      ctx.fillText('z', 17 + ph2 * 7, -12 - ph2 * 9 - i * 1.5);
+    }
+    ctx.globalAlpha = 1;
   }
   ctx.restore();
 }
@@ -3091,6 +3164,7 @@ window.__agility = {
     };
   },
   pet() { petDog(); },
+  menuIdle,
   pressKey(code) { app.run?.input(code, true); },
   releaseKey(code) { app.run?.input(code, false); },
 };

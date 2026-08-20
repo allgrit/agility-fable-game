@@ -361,6 +361,31 @@ const SCREENS = [
     })()`,
     criteria: 'Экран лидерборда: под заголовком «🏆 ЛУЧШИЕ ПРОГОНЫ» голубая строка онлайн-топа вида «🌐 1. Хлоя 2450 · 2. Рекс 2100 · 3. Джек 1980 (ты #7)», ниже локальная таблица и достижения — без наложения.',
   },
+  {
+    name: '37-menu-idle-scratch',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.state = 'menu';
+      A.app.lastInputT = A.app.t;      // не спим — показываем выходку
+      A.menuIdle.set('scratch');
+      A.menuIdle.t = 0.5;              // середина чесания
+    })()`,
+    criteria: 'Меню, собака живёт (S3.2): выбранная карточка Хлои — собака накренилась и ЧЕШЕТСЯ задней лапой у уха (лапа поднята к голове), остальные карточки статичны. Вёрстка меню не поехала.',
+  },
+  {
+    name: '38-menu-idle-sleep',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.state = 'menu';
+      A.app.lastInputT = A.app.t - 60;  // минута без ввода → сон
+      A.menuIdle.set('sleep');
+    })()`,
+    criteria: 'Меню, собака заснула (S3.2): на выбранной карточке собака осела к земле, глаз закрыт дужкой, уши обвисли, лапы поджаты, над головой всплывают «z z z».',
+  },
 ];
 for (const sc of SCREENS) {
   await page.evaluate(sc.setup);
