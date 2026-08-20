@@ -372,6 +372,7 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.code === 'Escape') return toMenu();
     if (e.code === 'KeyR') return startRun();
+    if (e.code === 'KeyP' && app.run.phase === 'countdown') return petDog();
     app.run.input(e.code, true);
   }
 });
@@ -397,6 +398,11 @@ canvas.addEventListener('pointerdown', (e) => {
       localStorage.setItem('agility_onboarded', '1');
       startRun();
       return;
+    }
+    // Ритуал старта: тап по собаке — погладить (S3.1)
+    if (app.run.phase === 'countdown') {
+      const ds = renderer.toScreen(app.run.dog.x, app.run.dog.y, 0.5);
+      if (Math.hypot(p.x - ds.x, p.y - ds.y) < renderer.cam.zoom * 2.0) { petDog(); return; }
     }
     // Тап по хендлеру — заявка риска (late-commit)
     if (app.run.phase === 'running' && app.run.focus?.count > 0) {
@@ -636,6 +642,14 @@ function applyBossVictory(bossCls) {
   saveMeta(meta);
 }
 
+// Погладить собаку на ритуале старта: главный крючок привязанности (S3.1)
+function petDog() {
+  if (!app.run) return;
+  const first = !app.run.petted;
+  if (!app.run.pet()) return;
+  if (first) track('pet', { mode: app.mode, cls: app.cls, breed: breedList[app.breedIdx].id });
+}
+
 function toMenu() { app.state = 'menu'; app.run = null; app.bossChallenge = null; audio.crowdLevel(0); }
 
 function startRun() {
@@ -854,6 +868,26 @@ function drawHud(run) {
     ctx.strokeText(txt, w / 2, canvas.height * 0.4);
     ctx.fillStyle = isGo ? '#ffd54a' : 'rgba(255,255,255,0.85)';
     ctx.fillText(txt, w / 2, canvas.height * 0.4);
+    ctx.restore();
+  }
+
+  // Приглашение погладить собаку в стойке (S3.1) — и подтверждение баффа
+  if (run.phase === 'countdown') {
+    const petMsg = run.petted ? '💙 Спокойный старт — дрожь ушла'
+      : (IS_TOUCH ? '🐾 Погладь собаку — тапни по ней' : '🐾 Погладь собаку — тап по ней или P');
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    const tw = ctx.measureText(petMsg).width;
+    const py2 = canvas.height * 0.56;
+    ctx.globalAlpha = run.petted ? 1 : (Math.sin(app.t * 4) > -0.4 ? 1 : 0.55);
+    ctx.fillStyle = 'rgba(20,40,60,0.7)';
+    ctx.strokeStyle = run.petted ? 'rgba(159,240,180,0.8)' : 'rgba(240,98,146,0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2 - 14 * z, py2 - 15 * z, tw + 28 * z, 26 * z, 13 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = run.petted ? '#9ff0b4' : '#ffd9e5';
+    ctx.fillText(petMsg, w / 2, py2 + 3 * z);
     ctx.restore();
   }
 
@@ -3056,6 +3090,7 @@ window.__agility = {
       } : null,
     };
   },
+  pet() { petDog(); },
   pressKey(code) { app.run?.input(code, true); },
   releaseKey(code) { app.run?.input(code, false); },
 };

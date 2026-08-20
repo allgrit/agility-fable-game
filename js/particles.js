@@ -53,6 +53,18 @@ export class Particles {
     }
   }
 
+  // Сердечки: награда за ласку (S3) — всплывают вверх и тают
+  hearts(x, y, n = 7) {
+    for (let i = 0; i < n; i++) this.spawn({
+      x: x + (Math.random() - 0.5) * 0.8, y: y - 0.3 - Math.random() * 0.4,
+      vx: (Math.random() - 0.5) * 0.8, vy: -1.4 - Math.random() * 0.9,
+      decay: 0.75, grav: -0.6, drag: 0.99,
+      rot: (Math.random() - 0.5) * 0.5, vr: (Math.random() - 0.5) * 1.5,
+      size: 0.26 + Math.random() * 0.14,
+      color: ['#f06292', '#e91e63', '#ff8a80'][i % 3], kind: 'heart',
+    });
+  }
+
   barPieces(x, y, angle) {
     for (let i = 0; i < 2; i++) this.spawn({
       x, y, vx: (Math.random() - 0.5) * 4, vy: -3 - Math.random() * 2,
@@ -113,6 +125,13 @@ export class Particles {
         ctx.fillRect(-px * 0.4, -px * 0.12, px * 0.5, px * 0.24);
       } else if (p.kind === 'confetti') {
         ctx.fillRect(-px / 2, -px / 4, px, px / 2);
+      } else if (p.kind === 'heart') {
+        // Сердечко: две дуги + треугольный низ
+        ctx.beginPath();
+        ctx.moveTo(0, px * 0.5);
+        ctx.bezierCurveTo(-px * 1.2, -px * 0.35, -px * 0.4, -px * 1.0, 0, -px * 0.35);
+        ctx.bezierCurveTo(px * 0.4, -px * 1.0, px * 1.2, -px * 0.35, 0, px * 0.5);
+        ctx.fill();
       } else if (p.kind === 'ribbon') {
         // Лента: узкая полоса с волной-флаттером
         const wobble = Math.sin(p.life * 9 + (p.flutter || 0)) * px * 0.25;

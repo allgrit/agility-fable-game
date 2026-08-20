@@ -489,9 +489,12 @@ export class Renderer {
       ctx.lineTo(lx + Math.sin(swing) * 7, 9 + Math.abs(Math.cos(swing)) * 2);
       ctx.stroke();
     }
+    // Ласка (S3): собака тает под рукой — хвост частит, уши прижаты, глаза щурятся
+    const petted = (dog.petT || 0) > 0;
     // Хвост: радость — виляет, после ошибки (sadT) — поджат вниз
     const sad = dog.sadT > 0;
-    const wag = sad ? 1 : Math.sin(this.time * (dog.happy ? 18 : 8)) * (dog.happy ? 7 : 3);
+    const wag = sad ? 1
+      : Math.sin(this.time * (petted ? 26 : dog.happy ? 18 : 8)) * (petted ? 9 : dog.happy ? 7 : 3);
     ctx.strokeStyle = breed.body; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(-13, -3);
     if (sad) ctx.quadraticCurveTo(-17, 3, -18, 8);
@@ -579,7 +582,12 @@ export class Renderer {
     ctx.fill();
     ctx.fillStyle = '#222';
     ctx.beginPath(); ctx.arc(21 * stretch, -3 + bob, 1.3, 0, Math.PI * 2); ctx.fill(); // нос
-    if (breed.eye) { // голубой глаз с зрачком
+    if (petted) { // блаженный прищур: глаз-дужка вместо круга
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 0.9; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(15.5 * stretch, -5.0 + bob, 1.5, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+    } else if (breed.eye) { // голубой глаз с зрачком
       ctx.fillStyle = breed.eye;
       ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.35, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#222';
@@ -588,7 +596,7 @@ export class Renderer {
       ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.1, 0, Math.PI * 2); ctx.fill(); // глаз
     }
     // Уши: торчком в ожидании команды (alert), назад на скорости/в полёте
-    const earBack = dog.alert ? -0.35 : dog.airborne ? 0.8 : speedK * 0.5;
+    const earBack = petted ? 1.5 : dog.alert ? -0.35 : dog.airborne ? 0.8 : speedK * 0.5;
     ctx.fillStyle = breed.ear;
     for (const side of [-1, 1]) {
       ctx.save();
@@ -609,7 +617,7 @@ export class Renderer {
       }
     }
     // Язык на радостях
-    if (dog.happy) {
+    if (dog.happy || petted) {
       ctx.fillStyle = '#e2697d';
       ctx.beginPath();
       ctx.ellipse(19 * stretch, 0.5 + bob, 1.5, 2.6 + Math.sin(this.time * 14) * 0.5, 0.3, 0, Math.PI * 2);

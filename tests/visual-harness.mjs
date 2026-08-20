@@ -56,6 +56,7 @@ const RUNNER = `(async (opts) => {
   run.update = () => {};
   const pred = new Function('run', 'm', 'q', 't', 'return (' + opts.predicate + ');');
   let guard = 0, missArmed = opts.missAt || 0;
+  if (opts.pet) A.pet(); // S3: гладим собаку на ритуале старта
   while (guard++ < 60000 && run.phase !== 'finished') {
     const m = run.activeMark;
     const q = m && m.qte;
@@ -262,12 +263,17 @@ const SCENES = [
     predicate: "run.commentator.line && run.commentator.line.t > 0.5 && run.commentator.line.t < 1.4 && run.marks.some(x=>x.resolved)",
     criteria: 'Комментатор ринга: под шапкой HUD голубая пилюля с иконкой 🎙 и курсивной репликой трансляции (например «Чисто! Пока ни одной планки на траве.»). Строка не наезжает на панели времени/фолтов и на QTE внизу.',
   },
+  {
+    name: '36-petting', mode: 'career', cls: 'novice', stage: 1, pet: true,
+    predicate: "run.phase === 'countdown' && run.dog.petT > 0.55",
+    criteria: 'Ласка на старте (S3.1): собака в стойке с ПРИЖАТЫМИ ушами, прищуренным глазом-дужкой и высунутым языком, вокруг вверх летят розовые сердечки, под «На старт…» зелёная плашка «💙 Спокойный старт — дрожь ушла», рядом попап «💙 Спокойный старт».',
+  },
 ];
 
 const manifest = [];
 for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
-    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx,
+    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx, pet: sc.pet,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
     riskFirst: sc.riskFirst, testDrive: sc.testDrive,
   })})`);

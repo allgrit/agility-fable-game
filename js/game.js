@@ -101,6 +101,24 @@ export class Run {
     return true;
   }
 
+  // Погладить собаку в стойке (S3.1, Nintendogs-крючок). Только на ритуале старта.
+  // Микро-бафф «спокойный старт»: дрожь уходит, окно первого снаряда ×1.1.
+  pet() {
+    if (this.phase !== 'countdown') return false;
+    this.dog.petT = 1.0;
+    this.fx.hearts(this.dog.x, this.dog.y, 7);
+    this.audio.good?.();
+    haptic('perfect');
+    if (!this.petted) {
+      this.petted = true;
+      this.calmStart = true;
+      this.popups.push({ text: '💙 Спокойный старт', color: '#8fd8ff',
+        x: this.dog.x, y: this.dog.y - 2.4, t: 0 });
+      this.emit({ type: 'pet' });
+    }
+    return true;
+  }
+
   // Реплика комментатора: сам решает, звучать ли (кулдаун/приоритет внутри).
   say(trigger, ctx = {}) {
     const line = this.commentator.say(trigger, { dog: this.dogName, ...ctx });
@@ -116,7 +134,11 @@ export class Run {
   // Опции QTE по типу снаряда: прогрессия механик и параметры V4.
   _qteOpts(type) {
     const cls = this.course.cls;
-    const opts = { windowScale: this.windowScale };
+    // «Спокойный старт» (S3.1): ласка перед стартом расширяет окно ПЕРВОГО снаряда
+    // на 10% — тёплый жест, а не боевой бафф.
+    const calm = this.calmStart && !this._calmUsed;
+    if (calm) this._calmUsed = true;
+    const opts = { windowScale: this.windowScale * (calm ? 1.1 : 1) };
     if (type === 'tire') {
       // Double-tap шины — механика Excellent+; раньше это обычный тап
       opts.noApex = cls === 'novice' || cls === 'open';
@@ -182,7 +204,8 @@ export class Run {
     if (this.phase === 'countdown') {
       // Ритуал старта: полная тишина, собака дрожит в стойке, судья поднимает руку.
       this.countdownT -= dt;
-      this.dog.tremble = this.countdownT < 1.6;
+      // Погладили — собака спокойна: дрожь в стойке уходит (S3.1)
+      this.dog.tremble = this.countdownT < 1.6 && !this.calmStart;
       if (this.countdownT <= 0) {
         this.phase = 'running';
         this.dog.tremble = false;
@@ -726,6 +749,7 @@ export class Run {
       this.fx.dust(d.x + 0.3, d.y);
       this.r.kick(0, 3);
     }
+    if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9); // ~1.1с блаженства
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
     if (d.popT > 0) d.popT = Math.max(0, d.popT - dt * 5); // ~0.2с пружина perfect
 
