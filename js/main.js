@@ -306,6 +306,11 @@ function settingsZone() {
   const z = Math.min(canvas.width, canvas.height) / 700;
   return { x: canvas.width - 34 * z, y: 455 * z, r: 26 * z };
 }
+// S3.7: досье собаки — кличка, характер, любимый снаряд, лучшее время
+function dossierZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 520 * z, r: 26 * z };
+}
 
 // Полноэкранный режим (недоступен на iPhone — там прячем кнопку).
 const FS_SUPPORTED = !!(document.documentElement.requestFullscreen);
@@ -339,12 +344,18 @@ window.addEventListener('keydown', (e) => {
     audio.click();
     return;
   }
+  if (e.code === 'KeyD' && app.state !== 'run') {
+    app.state = app.state === 'dossier' ? 'menu' : 'dossier';
+    audio.click();
+    return;
+  }
   if (e.code === 'KeyO' && app.state !== 'run') {
     app.state = app.state === 'settings' ? 'menu' : 'settings';
     audio.click();
     return;
   }
-  if (app.state === 'board' || app.state === 'shop' || app.state === 'quests' || app.state === 'settings') {
+  if (app.state === 'board' || app.state === 'shop' || app.state === 'quests'
+      || app.state === 'settings' || app.state === 'dossier') {
     if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); }
     return;
   }
@@ -465,6 +476,10 @@ canvas.addEventListener('pointerdown', (e) => {
     if (!handleSettingsTap(p)) { app.state = 'menu'; audio.click(); }
     return;
   }
+  if (app.state === 'dossier') {
+    if (!handleDossierTap(p)) { app.state = 'menu'; audio.click(); }
+    return;
+  }
   const tz = trophyZone();
   if (app.state === 'menu' && Math.hypot(p.x - tz.x, p.y - tz.y) < tz.r) {
     app.state = 'board'; audio.click(); return;
@@ -480,6 +495,10 @@ canvas.addEventListener('pointerdown', (e) => {
   const stz = settingsZone();
   if (app.state === 'menu' && Math.hypot(p.x - stz.x, p.y - stz.y) < stz.r) {
     app.state = 'settings'; audio.click(); return;
+  }
+  const dsz = dossierZone();
+  if (app.state === 'menu' && Math.hypot(p.x - dsz.x, p.y - dsz.y) < dsz.r) {
+    app.state = 'dossier'; audio.click(); return;
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
   // Дуэль-реванш с пропущенным боссом (строка «Дуэли» на карте карьеры)
@@ -1450,6 +1469,112 @@ function handleSettingsTap(p) {
   return false;
 }
 
+// ---------- ДОСЬЕ СОБАКИ (S3.7) ----------
+// Паспорт спортсмена: кличка (переименовывается), характер породы, любимый
+// снаряд по статистике перфектов, лучшее чистое время, уровень и титул.
+function drawDossier() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const breed = breedList[app.breedIdx];
+  const temper = temperamentFor(breed.id);
+  const d = dogState(meta, breed.id);
+  const fav = favoriteObstacle(meta.counters.obstacleStats);
+  const best = (meta.counters.bestTime || {})[breed.id];
+  const tag = titleFor(d.level);
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.88)';
+  ctx.fillRect(0, 0, w, h);
+  const pw = Math.min(560 * z, w * 0.94), ph = Math.min(470 * z, h * 0.9);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  panel(ctx, px, py, pw, ph);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('📖 Досье собаки', w / 2, py + 38 * z);
+
+  // Портрет: собака рисуется живой, с текущей idle-выходкой
+  ctx.save();
+  ctx.translate(px + 86 * z, py + 108 * z);
+  ctx.scale(1.5, 1.5);
+  drawCardDog(ctx, { runPhase: app.t * 4, happy: true,
+    // В паспорте собака бодрствует: сон из меню сюда не переносим
+    idle: { state: menuIdle.state === 'sleep' ? 'idle' : menuIdle.state, k: menuIdle.progress() } },
+    breed, 40 * z);
+  ctx.restore();
+
+  // Кличка — кликабельная строка (переименование)
+  ctx.textAlign = 'left';
+  const nx = px + 170 * z;
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${Math.round(26 * z)}px "Segoe UI", sans-serif`;
+  const nameTxt = dogName(meta, breed);
+  ctx.fillText(nameTxt, nx, py + 96 * z);
+  const ntw = ctx.measureText(nameTxt).width;
+  ctx.fillStyle = 'rgba(143,216,255,0.9)';
+  ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('✏ переименовать', nx + ntw + 14 * z, py + 96 * z);
+  app.renameZone = { x: nx - 6 * z, y: py + 74 * z, w: ntw + 150 * z, h: 30 * z };
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`${breed.name} · ур. ${d.level}${tag ? ` · ${tag}` : ''}`, nx, py + 120 * z);
+
+  const rows = [
+    ['🎭', 'Характер', temper.trait],
+    ['🐾', 'Повадка', temper.desc],
+    ['⭐', 'Любимый снаряд', fav
+      ? `${fav.name} (${Math.round(fav.rate * 100)}% идеальных)`
+      : 'ещё изучаем — нужно больше прогонов'],
+    ['⏱', 'Лучшее чистое время', best != null ? `${best.toFixed(2)}с` : '—'],
+    ['🏵️', 'Розетки хендлера', String(meta.rosettes)],
+    ['🥇', 'Золотых медалей', String(medalCounts()[3])],
+  ];
+  const rw = pw - 56 * z, rx = w / 2 - rw / 2, rh = 34 * z, gap = 7 * z;
+  rows.forEach(([icon, label, val], i) => {
+    const yy = py + 160 * z + i * (rh + gap);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.roundRect(rx, yy, rw, rh, 9 * z); ctx.fill();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(icon, rx + 12 * z, yy + rh / 2 + 1);
+    ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(label, rx + 38 * z, yy + rh / 2 + 1);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#e8f5ec';
+    ctx.font = `bold ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    // Длинные повадки ужимаем по ширине, чтобы не наезжать на подпись
+    let v = val;
+    const maxW = rw - 190 * z;
+    while (ctx.measureText(v).width > maxW && v.length > 14) v = v.slice(0, -2);
+    if (v !== val) v += '…';
+    ctx.fillText(v, rx + rw - 12 * z, yy + rh / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+  });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('D / ESC / тап мимо — назад', w / 2, py + ph - 18 * z);
+  ctx.restore();
+}
+
+function handleDossierTap(p) {
+  const rz = app.renameZone;
+  if (rz && p.x >= rz.x && p.x <= rz.x + rz.w && p.y >= rz.y && p.y <= rz.y + rz.h) {
+    const breed = breedList[app.breedIdx];
+    let name = null;
+    try { name = window.prompt('Кличка собаки:', dogName(meta, breed)); } catch {}
+    if (name && name.trim()) {
+      dogState(meta, breed.id).name = name.trim().slice(0, 18);
+      saveMeta(meta);
+      audio.good();
+      track('dog_rename', { breed: breed.id });
+    }
+    return true;
+  }
+  return false;
+}
+
 // ---------- ГАЗЕТНАЯ ВЫРЕЗКА (победа над боссом) ----------
 function drawNews() {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
@@ -1852,6 +1977,7 @@ function drawTrophyIcon() {
     [shopZone(), '🛍', null],
     [questsZone(), '📋', qDone < 3 ? `${qDone}/3` : '✓'],
     [settingsZone(), '⚙️', null],
+    [dossierZone(), '📖', null],
   ]) {
     ctx.fillStyle = 'rgba(10,20,15,0.55)';
     ctx.beginPath(); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2); ctx.fill();
@@ -3083,7 +3209,7 @@ let _prevScreen = null;
 function trackScreen() {
   if (app.state === _prevScreen) return;
   _prevScreen = app.state;
-  if (['menu', 'board', 'shop', 'quests', 'settings', 'results', 'champion', 'news', 'trainer', 'calib'].includes(app.state)) {
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'results', 'champion', 'news', 'trainer', 'calib'].includes(app.state)) {
     track('screen_open', { screen: app.state, mode: app.mode });
   }
 }
@@ -3094,7 +3220,7 @@ function frame(now) {
   app.t += dt;
   trackScreen();
 
-  if (['menu', 'board', 'shop', 'quests', 'settings'].includes(app.state)) {
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier'].includes(app.state)) {
     audio.music?.setState('menu');
     drawMenu(dt);
     drawMuteIcon();
@@ -3103,6 +3229,7 @@ function frame(now) {
     if (app.state === 'shop') drawShop();
     if (app.state === 'quests') drawQuests();
     if (app.state === 'settings') drawSettings();
+    if (app.state === 'dossier') drawDossier();
     drawToasts(dt);
   } else if (app.state === 'calib') {
     drawCalib();

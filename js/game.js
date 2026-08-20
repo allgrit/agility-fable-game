@@ -3,7 +3,7 @@ import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
 import { computeSct, BREEDS } from './scoring.js';
 import { haptic } from './haptics.js';
-import { Commentator } from './soul.js';
+import { Commentator, temperamentFor } from './soul.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
@@ -31,6 +31,8 @@ export class Run {
     this.dogName = dogName || breed.name;
     this.bestTime = bestTime;       // личный рекорд трассы: питает реплику «рекорд ринга»
     this.commentator = new Commentator();
+    // S3.7: темперамент породы — чистая косметика (приседает/кланяется/лает/падает)
+    this.temper = temperamentFor(breed.id);
     this.bonusPoints = 0;           // событийные бонусы очков (Golden Weave и т.п.)
     this.course = course;
     this.breed = breed;
@@ -117,6 +119,16 @@ export class Run {
       this.emit({ type: 'pet' });
     }
     return true;
+  }
+
+  // Лай задиры на призрака: голос + попап, не чаще раза в 2с
+  _bark() {
+    if (this.time - (this._lastBark ?? -9) < 2) return;
+    this._lastBark = this.time;
+    this.audio.bark?.(this.breed.size || 1);
+    this.popups.push({ text: 'Гав! Гав!', color: '#ffd54a',
+      x: this.dog.x, y: this.dog.y - 2.8, t: 0 });
+    this.emit({ type: 'bark' });
   }
 
   // Реплика комментатора: сам решает, звучать ли (кулдаун/приоритет внутри).
@@ -206,9 +218,15 @@ export class Run {
       this.countdownT -= dt;
       // Погладили — собака спокойна: дрожь в стойке уходит (S3.1)
       this.dog.tremble = this.countdownT < 1.6 && !this.calmStart;
+      // Темперамент на старте: бордер приседает от нетерпения, шелти кланяется
+      if (this.temper.quirk === 'crouch' || this.temper.quirk === 'bow') {
+        this.dog.pose = this.temper.quirk;
+        this.dog.poseK = 1;
+      }
       if (this.countdownT <= 0) {
         this.phase = 'running';
         this.dog.tremble = false;
+        this.dog.pose = null;
         this.audio.whistle();
         this.audio.crowdLevel(0.3);
         this.audio.music?.setState('run');
@@ -377,6 +395,17 @@ export class Run {
       this.activeIdx = -1;
     }
 
+    // Хлоя-задира: лает, когда призрак обходит её или она обходит призрака (S3.7)
+    if (this.ghost && this.ghost.time > 0) {
+      const gd = this.time / this.ghost.time * this.path.length;
+      const ghostAhead = gd > d.dist;
+      if (this._ghostAheadPrev === undefined) this._ghostAheadPrev = ghostAhead;
+      else if (ghostAhead !== this._ghostAheadPrev) {
+        this._ghostAheadPrev = ghostAhead;
+        if (this.temper.quirk === 'barkGhost') this._bark();
+      }
+    }
+
     // Босс-призрак финишировал раньше нас — толпа ахает
     if (this.ghost && !this._ghostFinished && this.time >= this.ghost.time) {
       this._ghostFinished = true;
@@ -398,6 +427,9 @@ export class Run {
       else this.audio.sad();
       this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
       this.say(clean ? 'finishClean' : 'finishFault', { t: this.time.toFixed(2) });
+      // Выходка на финише: джек драматично падает, пудель крутит пируэт (S3.7)
+      if (this.temper.quirk === 'faint') { d.pose = 'faint'; this.quirkT = 0; }
+      else if (this.temper.quirk === 'pirouette' && clean) { d.pose = 'pirouette'; this.quirkT = 0; }
       this.emit({ type: 'finish' });
     }
   }
@@ -750,6 +782,11 @@ export class Run {
       this.r.kick(0, 3);
     }
     if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9); // ~1.1с блаженства
+    // Прогресс финишной выходки темперамента: 0 → 1 за 0.8с, дальше держится
+    if (d.pose === 'faint' || d.pose === 'pirouette') {
+      this.quirkT = (this.quirkT || 0) + dt;
+      d.poseK = Math.min(1, this.quirkT / 0.8);
+    }
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
     if (d.popT > 0) d.popT = Math.max(0, d.popT - dt * 5); // ~0.2с пружина perfect
 

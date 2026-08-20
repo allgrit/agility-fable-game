@@ -478,6 +478,21 @@ export class Renderer {
     }
     // Дрожь в стойке перед стартом
     if (dog.tremble) ctx.translate(Math.sin(this.time * 40) * 0.8, 0);
+    // Выходки темперамента (S3.7) — чистая косметика, на баланс не влияют
+    const poseK = dog.poseK ?? 1;
+    if (dog.pose === 'crouch') {          // бордер: приседает от нетерпения
+      ctx.translate(0, 2.2 + Math.sin(this.time * 6) * 0.5);
+      ctx.scale(1.04, 0.82);
+    } else if (dog.pose === 'bow') {      // шелти: поклон-потягушка
+      ctx.rotate(0.30 * (0.85 + Math.sin(this.time * 2.4) * 0.15));
+      ctx.translate(0, 1.2);
+    } else if (dog.pose === 'faint') {    // джек: драматично падает на бок
+      ctx.rotate(poseK * Math.PI * 0.5);
+      ctx.translate(0, poseK * 3);
+    } else if (dog.pose === 'pirouette') { // пудель: пируэт после чистого прогона
+      ctx.rotate(poseK * Math.PI * 4);
+      ctx.scale(1 - poseK * 0.06, 1 - poseK * 0.06);
+    }
 
     // Ноги
     ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';

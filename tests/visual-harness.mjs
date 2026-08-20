@@ -268,6 +268,11 @@ const SCENES = [
     predicate: "run.phase === 'countdown' && run.dog.petT > 0.55",
     criteria: 'Ласка на старте (S3.1): собака в стойке с ПРИЖАТЫМИ ушами, прищуренным глазом-дужкой и высунутым языком, вокруг вверх летят розовые сердечки, под «На старт…» зелёная плашка «💙 Спокойный старт — дрожь ушла», рядом попап «💙 Спокойный старт».',
   },
+  {
+    name: '40-temperament-bow', mode: 'career', cls: 'novice', stage: 1, breedIdx: 1,
+    predicate: "run.phase === 'countdown' && run.countdownT < 1.0 && run.dog.pose === 'bow'",
+    criteria: 'Темперамент шелти (S3.7): на ритуале старта собака в ПОКЛОНЕ-потягушке — корпус наклонён вперёд-вниз, морда у земли; надпись «На старт…» и плашка приглашения погладить на месте.',
+  },
 ];
 
 const manifest = [];
@@ -385,6 +390,20 @@ const SCREENS = [
       A.menuIdle.set('sleep');
     })()`,
     criteria: 'Меню, собака заснула (S3.2): на выбранной карточке собака осела к земле, глаз закрыт дужкой, уши обвисли, лапы поджаты, над головой всплывают «z z z».',
+  },
+  {
+    name: '39-dossier',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.meta.counters.obstacleStats = { jump: { seen: 24, perfect: 15 }, weave: { seen: 9, perfect: 8 },
+        tunnel: { seen: 7, perfect: 3 } };
+      A.meta.counters.bestTime = { aussie: 28.44 };
+      A.meta.rosettes = 4;
+      A.app.state = 'dossier';
+    })()`,
+    criteria: 'Досье собаки (S3.7): панель «📖 Досье собаки» — слева живой портрет Хлои, справа кличка с кнопкой «✏ переименовать» и строкой породы/уровня, ниже строки-пилюли: Характер «Задира», Повадка, Любимый снаряд «слалом (89% идеальных)», Лучшее чистое время 28.44с, розетки, золото. Ничего не наезжает.',
   },
 ];
 for (const sc of SCREENS) {
