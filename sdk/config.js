@@ -6,7 +6,7 @@ export const SDK = {
   GAME_ID: 'agility-trial',
 
   // Версия сборки. Показывается в меню, служит меткой аналитики.
-  VERSION: 'v1 · 2026-07-11',
+  VERSION: 'v1 · 2026-08-21 · S3 «Душа собаки»',
 
   // Общий бэкенд Fable Arcade (лидерборд + аналитика).
   API: 'https://tribe.tsdpu.org/lb',
