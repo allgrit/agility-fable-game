@@ -1,7 +1,7 @@
 // Service worker: network-first — каждый заход тянет свежие файлы с сервера
 // (обходя HTTP-кеш браузера), офлайн-фолбэк из кеша. Любой деплой виден
 // клиентам при следующей загрузке страницы без ручной очистки кеша.
-const BUILD = 'build-2026-08-21-1-s3-nintendogs';
+const BUILD = 'build-2026-08-21-2-s4-rhythm-world';
 
 self.addEventListener('install', () => self.skipWaiting());
 

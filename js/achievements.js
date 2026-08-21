@@ -2,6 +2,39 @@ import { saveMeta } from './meta.js';
 
 // Система достижений: 36 записей — цепочки I/II/III и одиночные.
 // id первых 10 не меняются (совместимость agility_ach).
+//
+// Пороги — данные, а не константы в if: у «счётчиковых» ачивок есть поля
+// `metric` (ключ из CAREER_METRICS) и `target`. Один источник истины:
+// checkAchievements() выдаёт их по этим же полям, а витрина целей (goals.js)
+// по ним же рисует прогресс-бары. У ачивок, чьё условие не сводится к
+// накопительному счётчику (комбо за забег, победа над боссом, запас к SCT),
+// поля metric/target отсутствуют — такие цели бинарные (0/1).
+
+// Накопительные метрики карьеры: читаются ТОЛЬКО из meta, без данных прогона,
+// поэтому одинаково доступны и при выдаче ачивки, и на экране целей.
+export const CAREER_METRICS = {
+  obstacles: (meta) => meta.counters?.obstacles || 0,
+  perfects:  (meta) => meta.counters?.perfects || 0,
+  quals:     (meta) => meta.counters?.quals || 0,
+  fakeouts:  (meta) => meta.counters?.fakeouts || 0,
+  breeds:    (meta) => Object.keys(meta.counters?.breeds || {}).length,
+  streak:    (meta) => meta.streak?.count || 0,
+  bones:     (meta) => meta.bones || 0,
+  owned:     (meta) => Object.keys(meta.owned || {}).length,
+};
+
+// Человекочитаемые единицы метрик (для подсказок витрины целей)
+export const METRIC_UNITS = {
+  obstacles: 'снарядов', perfects: 'идеальных', quals: 'квалификаций',
+  fakeouts: 'обманок', breeds: 'пород', streak: 'дней серии',
+  bones: '🦴', owned: 'предметов',
+};
+
+export function metricValue(key, meta) {
+  const f = CAREER_METRICS[key];
+  return f ? f(meta || {}) : 0;
+}
+
 export const ACHIEVEMENTS = [
   // --- Базовые (существующие id) ---
   { id: 'first-run',   icon: '🐾', name: 'Первый выход',   desc: 'Завершить первый забег' },
@@ -13,36 +46,36 @@ export const ACHIEVEMENTS = [
   { id: 'masters',     icon: '👑', name: 'Мастер',         desc: 'Дойти до класса Masters' },
   { id: 'worldcup-q',  icon: '🌍', name: 'Мировой уровень', desc: 'Чистый прогон реальной трассы чемпионата' },
   { id: 'daily-player', icon: '📅', name: 'Постоянство',   desc: 'Пройти трассу дня' },
-  { id: 'obstacles-100', icon: '💯', name: 'Сотня',        desc: '100 снарядов за карьеру' },
+  { id: 'obstacles-100', icon: '💯', name: 'Сотня',        desc: '100 снарядов за карьеру', metric: 'obstacles', target: 100 },
 
   // --- Цепочки ---
-  { id: 'obstacles-500',  icon: '🚧', name: 'Пятьсот снарядов',  desc: '500 снарядов суммарно' },
-  { id: 'obstacles-2500', icon: '🏗️', name: 'Ветеран трасс',     desc: '2500 снарядов суммарно' },
+  { id: 'obstacles-500',  icon: '🚧', name: 'Пятьсот снарядов',  desc: '500 снарядов суммарно', metric: 'obstacles', target: 500 },
+  { id: 'obstacles-2500', icon: '🏗️', name: 'Ветеран трасс',     desc: '2500 снарядов суммарно', metric: 'obstacles', target: 2500 },
   { id: 'combo-20',  icon: '⚡', name: 'Серия ×20',        desc: 'Комбо ×20 за один забег' },
   { id: 'combo-40',  icon: '🌪️', name: 'Неудержимость',    desc: 'Комбо ×40 за один забег' },
-  { id: 'quals-15',  icon: '📜', name: '15 квалификаций',  desc: '15 прогонов с Q' },
-  { id: 'quals-60',  icon: '🏛️', name: 'Ходячий протокол', desc: '60 прогонов с Q' },
-  { id: 'perfects-200', icon: '🎯', name: 'Снайпер',       desc: '200 идеальных нажатий суммарно' },
-  { id: 'perfects-1000', icon: '🎯', name: 'Хирург тайминга', desc: '1000 идеальных нажатий суммарно' },
-  { id: 'streak-3',  icon: '🔥', name: 'Три дня подряд',   desc: 'Серия трассы дня: 3 дня' },
-  { id: 'streak-7',  icon: '🗓️', name: 'Неделя без пропуска', desc: 'Серия трассы дня: 7 дней' },
-  { id: 'streak-30', icon: '🏵️', name: 'Месяц дисциплины', desc: 'Серия трассы дня: 30 дней' },
+  { id: 'quals-15',  icon: '📜', name: '15 квалификаций',  desc: '15 прогонов с Q', metric: 'quals', target: 15 },
+  { id: 'quals-60',  icon: '🏛️', name: 'Ходячий протокол', desc: '60 прогонов с Q', metric: 'quals', target: 60 },
+  { id: 'perfects-200', icon: '🎯', name: 'Снайпер',       desc: '200 идеальных нажатий суммарно', metric: 'perfects', target: 200 },
+  { id: 'perfects-1000', icon: '🎯', name: 'Хирург тайминга', desc: '1000 идеальных нажатий суммарно', metric: 'perfects', target: 1000 },
+  { id: 'streak-3',  icon: '🔥', name: 'Три дня подряд',   desc: 'Серия трассы дня: 3 дня', metric: 'streak', target: 3 },
+  { id: 'streak-7',  icon: '🗓️', name: 'Неделя без пропуска', desc: 'Серия трассы дня: 7 дней', metric: 'streak', target: 7 },
+  { id: 'streak-30', icon: '🏵️', name: 'Месяц дисциплины', desc: 'Серия трассы дня: 30 дней', metric: 'streak', target: 30 },
   { id: 'speed-5',   icon: '⏱️', name: 'Быстрее судьи',    desc: 'Финиш на 5с раньше SCT' },
   { id: 'speed-10',  icon: '🚀', name: 'Реактивная собака', desc: 'Финиш на 10с раньше SCT' },
   { id: 'speed-15',  icon: '☄️', name: 'Молния ринга',     desc: 'Финиш на 15с раньше SCT' },
 
   // --- Одиночные ---
-  { id: 'all-breeds', icon: '🐕‍🦺', name: 'Кинолог',       desc: 'Пробежать каждой открытой породой' },
+  { id: 'all-breeds', icon: '🐕‍🦺', name: 'Кинолог',       desc: 'Пробежать каждой открытой породой', metric: 'breeds', target: 5 },
   { id: 'breed-lv10', icon: '🎖️', name: 'Титул ADX',      desc: 'Довести собаку до 10 уровня' },
   { id: 'breed-lv20', icon: '🏅', name: 'Титул MACH',      desc: 'Довести собаку до 20 уровня' },
   { id: 'all-gold-novice', icon: '🌈', name: 'Идеальный старт', desc: 'Все 5 золотых в классе Novice' },
   { id: 'worldcup-all', icon: '🗺️', name: 'Кругосветка',   desc: 'Q на всех 6 трассах чемпионатов' },
-  { id: 'fakeout-10', icon: '🃏', name: 'Не проведёшь',    desc: 'Разгадать 10 обманок «?»' },
+  { id: 'fakeout-10', icon: '🃏', name: 'Не проведёшь',    desc: 'Разгадать 10 обманок «?»', metric: 'fakeouts', target: 10 },
   { id: 'diamond',    icon: '💎', name: 'Бриллиант',       desc: 'Получить 4-ю звезду (перфект-челлендж)' },
-  { id: 'shopper',    icon: '🛍️', name: 'Первая обновка',  desc: 'Купить предмет в магазине' },
-  { id: 'collector-5', icon: '🎒', name: 'Коллекционер',   desc: 'Владеть 5 предметами' },
+  { id: 'shopper',    icon: '🛍️', name: 'Первая обновка',  desc: 'Купить предмет в магазине', metric: 'owned', target: 1 },
+  { id: 'collector-5', icon: '🎒', name: 'Коллекционер',   desc: 'Владеть 5 предметами', metric: 'owned', target: 5 },
   { id: 'fashionista', icon: '💃', name: 'Модник',         desc: 'Занять все 4 слота экипировки' },
-  { id: 'rich-1000',  icon: '🦴', name: 'Костяной магнат', desc: 'Накопить 1000 🦴 на балансе' },
+  { id: 'rich-1000',  icon: '🦴', name: 'Костяной магнат', desc: 'Накопить 1000 🦴 на балансе', metric: 'bones', target: 1000 },
   { id: 'poodle-run', icon: '🐩', name: 'Шоу пуделя',      desc: 'Пробежать трассу пуделем' },
 ];
 
@@ -85,28 +118,20 @@ export function checkAchievements(ctx) {
   if (cls === 'masters') grant('masters');
   if (mode === 'worldcup' && result.clean) grant('worldcup-q');
   if (mode === 'daily') grant('daily-player');
-  if (c.obstacles >= 100) grant('obstacles-100');
-  if (c.obstacles >= 500) grant('obstacles-500');
-  if (c.obstacles >= 2500) grant('obstacles-2500');
-  if (c.quals >= 15) grant('quals-15');
-  if (c.quals >= 60) grant('quals-60');
-  if (c.perfects >= 200) grant('perfects-200');
-  if (c.perfects >= 1000) grant('perfects-1000');
-  if (meta.streak.count >= 3) grant('streak-3');
-  if (meta.streak.count >= 7) grant('streak-7');
-  if (meta.streak.count >= 30) grant('streak-30');
+
+  // Счётчиковые ачивки: пороги берутся из данных (metric/target), а не из if.
+  // Тот же источник читает витрина целей — прогресс-бары не разъезжаются.
+  for (const a of ACHIEVEMENTS) {
+    if (!a.metric || !(a.target > 0)) continue;
+    if (metricValue(a.metric, meta) >= a.target) grant(a.id);
+  }
+
   const margin = run.sct - run.time;
   if (result.clean && margin >= 5) grant('speed-5');
   if (result.clean && margin >= 10) grant('speed-10');
   if (result.clean && margin >= 15) grant('speed-15');
-  if (Object.keys(c.breeds).length >= 5) grant('all-breeds');
-  if (c.fakeouts >= 10) grant('fakeout-10');
   if (result.stars >= 4) grant('diamond');
   if (run.breed.id === 'poodle') grant('poodle-run');
-  if (meta.bones >= 1000) grant('rich-1000');
-  const ownedCount = Object.keys(meta.owned).length;
-  if (ownedCount >= 1) grant('shopper');
-  if (ownedCount >= 5) grant('collector-5');
   const eq = (meta.dogs[run.breed.id] || {}).equip || {};
   if (['coat', 'neck', 'paws', 'finish'].every(sl => eq[sl])) grant('fashionista');
   // Медальные наборы

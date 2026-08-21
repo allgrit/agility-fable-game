@@ -34,6 +34,32 @@ const STATES = {
 // Пентатоника D для лид-паттернов (5 вариантов по бару)
 const PENTA = [293.7, 329.6, 370, 440, 493.9, 587.3];
 
+// Пороги вертикального слоения (vertical layering): комбо буквально включает
+// инструменты. Лид и арпеджиатор — награда за высокое комбо, поэтому их потеря
+// слышна как «музыка исчезла» — сильный негативный фидбек без штрафа очками.
+export const LAYER_THRESHOLDS = {
+  kick: 0, bass: 1, hats: 2, arp: 4, lead: 8, clap: 10, arpeggio: 12,
+};
+
+// Чистая функция — какие слои звучат при данной интенсивности (= комбо).
+export function activeLayers(intensity) {
+  const I = Number.isFinite(intensity) ? intensity : 0;
+  const out = {};
+  for (const k in LAYER_THRESHOLDS) out[k] = I >= LAYER_THRESHOLDS[k];
+  return out;
+}
+
+// Бит-клок: чистая арифметика четвертей, чтобы визуал мог «дышать» в такт
+// без доступа к WebAudio (и чтобы это можно было покрыть тестами в node).
+// elapsedSec — время от якоря состояния; такт = 4 четверти.
+export function beatClock(elapsedSec, bpm) {
+  const zero = { index: 0, phase: 0, barPhase: 0 };
+  if (!Number.isFinite(elapsedSec) || !Number.isFinite(bpm) || bpm <= 0 || elapsedSec <= 0) return zero;
+  const beats = elapsedSec / (60 / bpm);
+  const index = Math.floor(beats);
+  return { index, phase: beats - index, barPhase: (beats % 4) / 4 };
+}
+
 export class MusicEngine {
   constructor(ctx, master) {
     this.ctx = ctx;
@@ -49,6 +75,12 @@ export class MusicEngine {
     this.intensity = 0;        // = combo игрока
     this.step = 0;             // 16-е ноты
     this.nextTime = 0;
+    // Якорь бит-клока: nextTime — это БУДУЩЕЕ время планировщика (горизонт 120мс),
+    // как фаза оно бы увело картинку вперёд звука. Считаем от слышимого момента.
+    this.originTime = 0;
+    this.leadCutAt = null;     // когда в последний раз оборвали мелодию (для тестов/дебага)
+    this._fillFrom = 0;        // окно drum fill: [_fillFrom, _fillUntil)
+    this._fillUntil = 0;
     this.enabled = true;
     this._timer = setInterval(() => this._tick(), 25);
   }
@@ -58,9 +90,58 @@ export class MusicEngine {
     this.state = name;
     this.step = 0;
     this.nextTime = Math.max(this.nextTime, this.ctx.currentTime + 0.05);
+    this.originTime = this.nextTime;   // такт нового состояния начинается здесь
   }
 
-  setIntensity(v) { this.intensity = v; }
+  // ---- Бит-клок для рендера: мир дышит в бит ----
+  get bpm() { return this.state && STATES[this.state] ? STATES[this.state].bpm : 0; }
+
+  get _clock() {
+    if (!this.state || this.ctx.state !== 'running') return { index: 0, phase: 0, barPhase: 0 };
+    return beatClock(this.ctx.currentTime - this.originTime, this.bpm);
+  }
+
+  get beatIndex() { return this._clock.index; }
+  get beatPhase() { return this._clock.phase; }
+  get barPhase() { return this._clock.barPhase; }
+
+  // Импульс 1→0 внутри четверти: готовый множитель для пульсации визуала.
+  pulse(sharpness = 3) {
+    if (!this.state || this.ctx.state !== 'running') return 0;
+    return (1 - this._clock.phase) ** sharpness;
+  }
+
+  dispose() {
+    clearInterval(this._timer);
+    this._timer = null;
+  }
+
+  setIntensity(v) {
+    const had = activeLayers(this.intensity).lead;
+    this.intensity = v;
+    // Комбо упало ниже лид-порога — мелодия должна оборваться, а не растаять
+    if (had && !activeLayers(v).lead) this.leadCut();
+  }
+
+  // «Музыка исчезла»: короткий спад шины без удара — dip() по потере комбо
+  // прилетает отдельно из game.js, складывать два эффекта в кашу нельзя.
+  leadCut() {
+    const t = this.ctx.currentTime;
+    this.leadCutAt = t;
+    this.bus.gain.cancelScheduledValues(t);
+    this.bus.gain.setValueAtTime(this.bus.gain.value, t);
+    this.bus.gain.linearRampToValueAtTime(0.3 * 0.45, t + 0.07);
+    this.bus.gain.linearRampToValueAtTime(0.3, t + 0.5);
+  }
+
+  // Сбивка перед сменой темпа/финишем: планируется на такт вперёд, сетку не рвёт.
+  drumFill(delay = 0) {
+    const conf = STATES[this.state];
+    if (!conf) return;
+    const bar = (60 / conf.bpm) * 4;
+    this._fillFrom = this.ctx.currentTime + delay;
+    this._fillUntil = this._fillFrom + bar;
+  }
 
   speedFilter(dogSpeed) {
     // Быстрее собака — ярче микс
@@ -131,6 +212,9 @@ export class MusicEngine {
     const menu = this.state === 'menu';
     const I = this.intensity;
 
+    // Сбивка идёт поверх любого состояния — она про «сейчас что-то изменится»
+    if (t >= this._fillFrom && t < this._fillUntil) this._fillHit(t, step, stepDur);
+
     // Пад: аккорд на начало такта (везде)
     if (step % 16 === 0) {
       for (const f of chord) this._osc('triangle', f, t, stepDur * 14, menu ? 0.045 : 0.03);
@@ -147,28 +231,46 @@ export class MusicEngine {
     }
 
     // ---- RUN: слои по интенсивности (комбо) ----
+    const L = activeLayers(I);
     // Kick — всегда, на каждую четверть
-    if (sixteenth === 0) {
+    if (L.kick && sixteenth === 0) {
       this._osc('sine', 55, t, 0.11, 0.32);
     }
     // Бас — восьмые
-    if (I >= 1 && step % 2 === 0) {
+    if (L.bass && step % 2 === 0) {
       this._osc('sawtooth', conf.bass[bar] * (beat === 3 && sixteenth >= 2 ? 1.5 : 1), t, stepDur * 1.6, 0.075);
     }
     // Хэты — офбит
-    if (I >= 2 && sixteenth === 2) this._noise(t, 0.04, 0.05, 6000);
+    if (L.hats && sixteenth === 2) this._noise(t, 0.04, 0.05, 6000);
     // Арп — 16-е через одну
-    if (I >= 4 && step % 2 === 1) {
+    if (L.arp && step % 2 === 1) {
       this._osc('square', chord[step % chord.length] * 2, t, stepDur * 0.9, 0.028);
     }
-    // Лид — пентатоника, паттерн от бара
-    if (I >= 7 && sixteenth === 0) {
+    // Лид — пентатоника, паттерн от бара (награда за комбо ≥8)
+    if (L.lead && sixteenth === 0) {
       const idx = (bar * 3 + beat * 2 + Math.floor(step / 16)) % PENTA.length;
       this._osc('triangle', PENTA[idx] * 2, t, stepDur * 3, 0.05);
     }
     // Клэп толпы — 2 и 4 доля
-    if (I >= 10 && sixteenth === 0 && (beat === 1 || beat === 3)) {
+    if (L.clap && sixteenth === 0 && (beat === 1 || beat === 3)) {
       this._noise(t, 0.09, 0.08, 1500);
     }
+    // Арпеджиатор ≥12 — кульминация: плотные 16-е поверх лида. Тише и короче
+    // лида, иначе на верхнем комбо микс превращается в кашу.
+    if (L.arpeggio) {
+      const idx = (step * 2 + bar) % PENTA.length;
+      this._osc('sine', PENTA[idx] * 2, t, stepDur * 0.45, 0.022);
+    }
+  }
+
+  // Учащающиеся том-удары внутри окна сбивки: чем ближе конец, тем плотнее
+  // и выше — ухо успевает подготовиться к смене.
+  _fillHit(t, step, stepDur) {
+    const span = this._fillUntil - this._fillFrom;
+    const p = span > 0 ? (t - this._fillFrom) / span : 0;
+    const every = p > 0.75 ? 1 : p > 0.45 ? 2 : 4;   // 16-е → 8-е → четверти
+    if (step % every !== 0) return;
+    this._noise(t, stepDur * 0.8, 0.07 + p * 0.06, 220 + p * 900);
+    if (p > 0.6) this._osc('triangle', 110 + p * 180, t, stepDur * 0.7, 0.06);
   }
 }

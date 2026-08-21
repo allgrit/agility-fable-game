@@ -36,6 +36,10 @@ const RUNNER = `(async (opts) => {
   localStorage.setItem('agility_onboarded', '1');
   localStorage.setItem('agility_hints', JSON.stringify({ weave: 1, aframe: 1, dogwalk: 1,
     seesaw: 1, table: 1, tire2: 1, spread: 1, triple: 1, serpentine: 1 }));
+  // Колорблайнд выставляем ЯВНО каждой сцене (а не только когда просят) —
+  // иначе режим протёк бы из предыдущей сцены в следующие.
+  A.settings.colorblind = !!opts.colorblind;
+  A.applySettings();
   A.setMode(opts.mode || 'career');
   if (opts.cls) A.app.cls = opts.cls;
   if (opts.stage) A.app.stage = opts.stage;
@@ -65,7 +69,10 @@ const RUNNER = `(async (opts) => {
     if (q && q.state === 'active') {
       const d = q.def;
       const resolvedCount = run.marks.filter(x => x.resolved).length;
-      const skipInput = missArmed && resolvedCount === missArmed - 1; // намеренный промах N-го снаряда
+      // Намеренный промах: либо N-го снаряда (missAt), либо первого же после того,
+      // как накопилось missWhenStars звёзд (S4.7 — ловим момент сжигания).
+      const skipInput = (missArmed && resolvedCount === missArmed - 1)
+        || (!!opts.missWhenStars && !!run.stars && run.stars.count >= opts.missWhenStars);
       // Заявка риска (late-commit) на первом же press-снаряде
       if (opts.riskFirst && !m.risk && d.kind === 'press' && t < q.target - q.w && run.focus?.count > 0) {
         run.tryRisk();
@@ -80,7 +87,9 @@ const RUNNER = `(async (opts) => {
           if (q.beatIdx < d.count && t >= q.target + q.beatIdx * d.beat - 0.01) run.input(q.seq[q.beatIdx], true);
         } else if (d.kind === 'holdRelease' || d.kind === 'charge') {
           if (!q.holding && q.holdStart == null && t >= q.target - 0.01) run.input(d.key, true);
-          else if (q.holding && q.progress >= (d.zone[0] + d.zone[1]) / 2) run.input(d.key, false);
+          // noRelease: держим до упора — курсор уезжает за жёлтую зону
+          // в красную overdrive-зону (S4.5), иначе автопилот отпускает в середине жёлтой
+          else if (q.holding && !opts.noRelease && q.progress >= (d.zone[0] + d.zone[1]) / 2) run.input(d.key, false);
         } else if (d.kind === 'twoStage') {
           if (q.stage === 0 && t >= q.target - 0.01) run.input(d.key, true);
           else if (q.stage === 1 && (t - q.tipAt) >= d.tipDelay - 0.01) run.input(d.key2, true);
@@ -304,6 +313,66 @@ const SCENES = [
     predicate: "run.dog.airborne && run.dog.elevation > 0.6",
     criteria: 'Фото-режим с паузы (S3.8): мир заморожен на прыжке, HUD спрятан, кадр обрамлён белой рамкой с уголками-визиром, сверху подсказка «📸 Фото-режим · стрелки — кадр · +/− зум · S — сохранить PNG», внизу слева «🐕 Agility Trial!», справа кличка, по центру кнопки −, +, 💾 PNG, ✕ Выход.',
   },
+  // ---- S4 «Ритм-мир» ----
+  // 46/47 — контрастная ПАРА на пульс мира (S4.1). Амплитуда пульса в бою
+  // микроскопическая (масштабы 1.00→1.02, тень −2%), а в headless-прогоне
+  // AudioContext спит и beatOn=false — статичный «дышащий» кадр не доказал бы
+  // ничего. Поэтому: та же сцена, та же камера, приближённая к трибуне
+  // (renderer.cam.zoom), поля бита выставлены руками в долю и в противофазу,
+  // овации толпы (crowdHype от комбо) обнулены — в кадре остаётся ТОЛЬКО пульс.
+  {
+    name: '46-beat-crowd-on', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.phase === 'running' && run.time > 1.0",
+    beat: { pulse: 1, phase: 0 },
+    criteria: 'Пульс мира В ДОЛЮ (S4.1), кадр 1 из ПАРЫ 46/47 — смотреть только вместе с 47-beat-crowd-off. Крупный план двух рядов зрителей (цветные кружки-тела с телесными головами) на газоне; внизу кадра белая линия кромки ринга, вверху обычный HUD. Проверяемое: зрители здесь стоят ВЫШЕ, чем на 47 (примерно на 8–11 пикселей, у разных зрителей чуть по-разному), — зазор между верхом головы и панелями HUD/строкой комментатора здесь МЕНЬШЕ. Всё остальное (горизонтальные позиции и цвета зрителей, белая линия кромки ринга, HUD, кейкап ПРОБЕЛ) на обоих кадрах совпадает пиксель в пиксель. Отдельного виджета бита в HUD быть не должно — пульс живёт в самом мире.',
+  },
+  {
+    name: '47-beat-crowd-off', mode: 'career', cls: 'novice', stage: 1,
+    predicate: "run.phase === 'running' && run.time > 1.0",
+    beat: { pulse: 0, phase: 0.86 },
+    criteria: 'Пульс мира В ПРОТИВОФАЗЕ (S4.1), кадр 2 из ПАРЫ 46/47: тот же крупный план тех же зрителей с той же камеры, кадр снят при beatPulse=0 / beatPhase=0.86. Проверяемое: зрители здесь ОСЕЛИ вниз относительно 46-beat-crowd-on (~8–11 пикселей), зазор между верхом головы и HUD больше; белая линия кромки ринга внизу и все панели HUD стоят ровно там же, что и на 46 — сместилась только трибуна. Если высота зрителей на 46 и 47 одинакова, пульс мира до рендера не доходит — это провал сцены.',
+  },
+  // 48-50 — overdrive-зона (S4.5) на шкале контактного снаряда
+  {
+    name: '48-overdrive-yellow', mode: 'worldcup', realIdx: 1,
+    predicate: "m && q && q.holding && q.zoneRed && q.progress > 0.80 && q.progress < 0.87",
+    criteria: 'Overdrive, курсор в БЕЗОПАСНОЙ зоне (S4.5): собака на контактном снаряде, внизу по центру голубая шкала с подписью «Отпусти ↑ в жёлтой · красная = жадный бонус». На шкале справа широкий ЖЁЛТЫЙ сегмент, а у самого правого края шкалы — узкий КРАСНЫЙ блок в косую белую штриховку с двойным контуром. Белый вертикальный маркер-курсор стоит ВНУТРИ жёлтого сегмента, до красного блока он ещё не дошёл.',
+  },
+  {
+    name: '49-overdrive-red', mode: 'worldcup', realIdx: 1, noRelease: true,
+    predicate: "m && q && q.holding && q.zoneRed && q.progress >= q.zoneRed[0] + 0.004",
+    criteria: 'Overdrive, момент решения — курсор В КРАСНОЙ зоне (S4.5): та же шкала контакта с подписью «Отпусти ↑ в жёлтой · красная = жадный бонус», но белый вертикальный маркер уехал уже ПРАВЕЕ жёлтого сегмента — в самый конец шкалы, в узкий красный блок, от которого по бокам маркера видны красная заливка и красная рамка (блок настолько узкий, что маркер почти целиком его перекрывает — это и есть цена жадности). Именно здесь игрок решает: отпустить ради бонуса или сорваться с контакта.',
+  },
+  {
+    name: '50-overdrive-colorblind', mode: 'worldcup', realIdx: 1, colorblind: true,
+    predicate: "m && q && q.holding && q.zoneRed && q.progress > 0.80 && q.progress < 0.87",
+    criteria: 'Overdrive в КОЛОРБЛАЙНД-режиме (S4.5): тот же кадр, что 48-overdrive-yellow, но игра запущена с включённым тумблером «Колорблайнд». Проверяемое: overdrive-зона у правого края шкалы отличается от жёлтой зоны НЕ ТОЛЬКО ЦВЕТОМ — это блок в КОСУЮ БЕЛУЮ ШТРИХОВКУ с двойным контуром (внутренняя белая рамка + внешняя красная), тогда как соседний жёлтый сегмент — сплошная заливка без штриховки и без двойной рамки. Белый маркер-курсор — в жёлтом сегменте, штриховка видна целиком.',
+  },
+  // 51-54 — звёзды Punch-Out (S4.7): ряд живёт в правой HUD-панели
+  {
+    name: '51-stars-empty', mode: 'career', cls: 'open', stage: 2,
+    predicate: "run.phase === 'running' && run.time > 1.4 && run.stars.count === 0 && run.score.faults === 0",
+    criteria: 'Звёзды, ПУСТОЙ ряд (S4.7): в правой HUD-панели (под строками «Фолты» и «Комбо», рядом со строкой риска) виден ряд из ТРЁХ звёзд, и все три — полупрозрачные КОНТУРНЫЕ (незакрашенные): игрок сразу видит, сколько их всего. Подписи «ФИНИШ ×2» рядом со звёздами НЕТ.',
+  },
+  {
+    name: '52-stars-partial', mode: 'career', cls: 'open', stage: 2,
+    // Ждём затухания попапов и вспышки, иначе кадр выбелен флешем. Именно
+    // затухания, а не пустого списка: попапы идут почти непрерывно (оценка,
+    // микро-дельта, дельта призрака), и окно «две звезды И ноль попапов»
+    // может не наступить до третьей звезды — сцена ловила гонку.
+    predicate: "run.stars.count === 2 && run.phase === 'running' && !(run.flashT > 0) && !(run.hitstop > 0) && run.popups.every(p => p.t > 0.55)",
+    criteria: 'Звёзды, ЧАСТИЧНО набранные (S4.7): в правой HUD-панели ряд из трёх звёзд — ДВЕ левые залиты жёлтым, третья осталась полупрозрачным контуром. Ряд звёзд лежит НИЖЕ строк «Фолты» и «Комбо» и не наезжает на них и на кнопку звука. Подписи «ФИНИШ ×2» рядом со звёздами ещё НЕТ (финиш не заряжен, снаряд не последний — см. счётчик вверху слева). Значения фолтов и комбо в этой сцене не проверяются.',
+  },
+  {
+    name: '53-stars-finish-armed', mode: 'career', cls: 'open', stage: 2,
+    predicate: "run.stars.isFinishArmed() && run.phase === 'running'",
+    criteria: 'Звёзды, ФИНИШ ЗАРЯЖЕН (S4.7): в правой HUD-панели звёзды залиты жёлтым (одна или больше), а СПРАВА ОТ РЯДА жёлтым жирным шрифтом подпись «ФИНИШ ×2» — на последнем снаряде очки удвоятся. Подпись не наезжает на кнопку звука и на край панели. Счётчик снарядов вверху слева показывает предпоследний/последний снаряд.',
+  },
+  {
+    name: '54-stars-burn', mode: 'career', cls: 'open', stage: 2, missWhenStars: 1, wait: 300,
+    predicate: "run.stars.count === 0 && run.score.faults > 0",
+    criteria: 'Звёзды СГОРЕЛИ после промаха (S4.7): в правой HUD-панели все три звезды снова контурные (ни одной залитой жёлтым), но одна из них — УВЕЛИЧЕНА и подсвечена КРАСНЫМ: вспышка сжигания. Рядом признаки промаха — счётчик «Фолты» стал красным и не нулевым, у собаки попап ошибки, мир обесцвечен. Подписи «ФИНИШ ×2» нет.',
+  },
 ];
 
 const manifest = [];
@@ -312,7 +381,22 @@ for (const sc of SCENES) {
     mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx, pet: sc.pet,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
     riskFirst: sc.riskFirst, testDrive: sc.testDrive, lapT: sc.lapT, photo: sc.photo,
+    noRelease: sc.noRelease, missWhenStars: sc.missWhenStars, colorblind: sc.colorblind,
   })})`);
+  if (sc.beat) {
+    // S4.1: run.update уже заморожен, поэтому _pushBeat больше не перетирает поля —
+    // выставляем фазу бита руками и придвигаем камеру к трибуне, чтобы
+    // микроскопическая амплитуда пульса стала различима на паре кадров.
+    await page.evaluate(`(() => {
+      const run = window.__agility.app.run, r = run.r;
+      run.score.combo = 0;          // овации толпы зависят от комбо — гасим, иначе шумят
+      r.crowdStanding = false;
+      r.cam.zoom = 150; r.cam.x = 26; r.cam.y = -2.8;
+      r.beatOn = true;
+      r.beatPulse = ${sc.beat.pulse};
+      r.beatPhase = ${sc.beat.phase};
+    })()`);
+  }
   if (sc.setup === 'photoMode') {
     // S3.8: включаем фото-режим и слегка приближаем кадр
     await page.evaluate(`(() => {
@@ -331,7 +415,9 @@ for (const sc of SCENES) {
       if (run.popups) run.popups.length = 0;
     })()`);
   }
-  await new Promise(r => setTimeout(r, 1800)); // rAF дорисует замороженную сцену
+  // rAF дорисует замороженную сцену. Короткая пауза — только там, где важна
+  // сама вспышка (звёзды сгорают за 0.45с реального времени).
+  await new Promise(r => setTimeout(r, sc.wait ?? 1800));
   await page.screenshot({ path: join(OUT, sc.name + '.png') });
   manifest.push({ file: sc.name + '.png', hit: res.hit, criteria: sc.criteria });
   console.log(`${res.hit ? 'ok ' : 'MISS'} ${sc.name}`);
