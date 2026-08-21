@@ -857,6 +857,91 @@ function startWarmup() {
 }
 
 // ---------- HUD ----------
+// Сдвиг центрального текста шапки: в портрете панель со звёздами выше, и имя
+// класса/модификатор/комментатор должны уехать вниз ровно на добавленную строку.
+let hudShiftY = 0;
+// Анимация звёзд живёт в модуле, а не в Run: game.js — не наш файл, да и это
+// чисто визуальное состояние. Помним последний count и кто из слотов «вспыхнул».
+const starFx = { seen: -1, t: -9, dir: 0, idx: -1 };
+// То же для окна чистого выхода: Run отдаёт только момент закрытия, а для кольца
+// нужен момент открытия — засекаем его сами при смене until.
+const cleanFx = { until: -1, from: 0 };
+
+// Пятиконечная звезда: заливка = получена, контур = пустой слот.
+// Форма (заливка/контур) сама по себе несёт смысл — читается и в колорблайнде.
+function starGlyph(ctx, cx, cy, r, filled, color) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const rr = i % 2 ? r * 0.44 : r;
+    ctx[i ? 'lineTo' : 'moveTo'](cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  if (filled) { ctx.fillStyle = color; ctx.fill(); }
+  else { ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, r * 0.18); ctx.stroke(); }
+}
+
+// Ряд звёзд Punch-Out (S4.7): пустые слоты видны всегда — игрок сразу понимает,
+// что их три. Появление и сжигание — короткая вспышка: это момент драмы.
+function drawStarRow(ctx, run, x, cy, z) {
+  const st = run.stars;
+  const max = st.max || 3;
+  const count = Math.max(0, Math.min(max, st.count | 0));
+  if (starFx.seen !== count) {
+    // первый кадр не анимируем — иначе вспышка на рестарте забега
+    if (starFx.seen >= 0) {
+      starFx.t = app.t;
+      starFx.dir = count > starFx.seen ? 1 : -1;
+      starFx.idx = Math.max(count, starFx.seen) - 1;
+    }
+    starFx.seen = count;
+  }
+  const flash = Math.max(0, 1 - (app.t - starFx.t) / 0.45);
+  const step = 23 * z, r = 9 * z;
+  ctx.save();
+  for (let i = 0; i < max; i++) {
+    const sx = x + step * (i + 0.5);
+    const hot = i === starFx.idx && flash > 0;
+    const sc = hot ? 1 + Math.sin(flash * Math.PI) * 0.55 : 1;
+    const filled = i < count;
+    let color = filled ? '#ffd54a' : 'rgba(255,255,255,0.34)';
+    if (hot) color = starFx.dir > 0 ? '#fffbe6' : '#ff6b6b';
+    starGlyph(ctx, sx, cy, r * sc, filled, color);
+  }
+  // Финиш заряжен — главная мотивация не мазать на последнем снаряде
+  if (st.isFinishArmed?.() === true) {
+    const p = 0.5 + 0.5 * Math.sin(app.t * 6);
+    // Подпись слева направо сразу за звёздами: у правого края панели живёт
+    // кнопка звука, туда лезть нельзя.
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = `900 ${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = `rgba(255,213,74,${0.6 + 0.4 * p})`;
+    ctx.fillText('ФИНИШ ×2', x + step * max + 8 * z, cy);
+  }
+  ctx.restore();
+}
+
+// Намёк на окно чистого выхода (S4.6): маленькое кольцо над собакой, которое
+// «сдувается» вместе с окном. Ни баннеров, ни текста — механика для своих.
+function drawCleanExitHint(run, z) {
+  const ce = run.cleanExit;
+  if (!ce || ce.used || !run.dog || !(run.time < ce.until)) return;
+  if (cleanFx.until !== ce.until) { cleanFx.until = ce.until; cleanFx.from = run.time; }
+  const span = Math.max(0.12, ce.until - cleanFx.from);
+  const k = Math.max(0, Math.min(1, (ce.until - run.time) / span));
+  const s = renderer.toScreen(run.dog.x, run.dog.y, 1.6);
+  const ctx = renderer.ctx;
+  ctx.save();
+  ctx.globalAlpha = 0.25 + 0.5 * k;
+  ctx.strokeStyle = '#9ff0b4'; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, 9 * z, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#9ff0b4';
+  ctx.beginPath(); ctx.arc(s.x, s.y, 2 * z, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 function drawHud(run) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   const z = Math.min(w, h) / 700;
@@ -899,22 +984,44 @@ function drawHud(run) {
   ctx.restore();
 
   ctx.save();
-  panel(ctx, w - 230 * z - 14, 14, 230 * z, 112 * z);
+  // Панель растёт на одну строку только если есть И риск, И звёзды — иначе
+  // звёзды садятся на свободную третью строку и высота остаётся прежней.
+  const riskOn = !!run.focus, starsOn = !!run.stars;
+  const rx = w - 230 * z - 14;
+  panel(ctx, rx, 14, 230 * z, (riskOn && starsOn ? 140 : 112) * z);
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
   ctx.textAlign = 'right'; ctx.textBaseline = 'top';
   ctx.fillStyle = run.score.faults ? '#ff8a8a' : '#fff';
   ctx.fillText(`Фолты: ${run.score.faults}`, w - 30, 26 * z);
   const combo = Math.floor(run.score.combo);
   ctx.fillStyle = combo >= 3 ? '#ffd54a' : '#cfd8dc';
-  ctx.fillText(combo > 0 ? `Комбо ×${combo}` : 'Комбо —', w - 30, 56 * z);
+  // Надбавка «чистого выхода» (S4.6) — приписка к комбо, и только когда она есть:
+  // механика для своих, новичка не заваливаем лишним текстом.
+  const ceBonus = run.cleanExitBonus > 0 ? ` +${run.cleanExitBonus.toFixed(1)}` : '';
+  const comboTxt = combo > 0 ? `Комбо ×${combo}${ceBonus}` : 'Комбо —';
+  // Дыхание в бит (S4.1): только число комбо и только на наградном лид-слое
+  // (комбо ≥8). Позиции панелей и кнопок не трогаем — их проверяет e2e.
+  const beat = combo >= 8 ? (audio.music?.pulse?.() ?? 0) : 0;
+  if (beat > 0.01) {
+    ctx.save();
+    ctx.translate(w - 30, 56 * z);
+    ctx.scale(1 + beat * 0.02, 1 + beat * 0.02);
+    ctx.fillText(comboTxt, 0, 0);
+    ctx.restore();
+  } else ctx.fillText(comboTxt, w - 30, 56 * z);
   // Фокусы риска: ⚡ доступные заявки late-commit (Shift / тап по хендлеру)
-  if (run.focus) {
+  if (riskOn) {
     ctx.font = `bold ${Math.round(17 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = run.focus.count > 0 ? '#ff8a65' : 'rgba(255,255,255,0.3)';
     const bolts = '⚡'.repeat(run.focus.count) + '·'.repeat(run.focus.max - run.focus.count);
     ctx.fillText(`Риск ${bolts}`, w - 30, 88 * z);
   }
+  // Звёзды Punch-Out (S4.7)
+  if (starsOn) drawStarRow(ctx, run, rx + 14 * z, (riskOn ? 127 : 97) * z, z);
   ctx.restore();
+  // В портрете панели идут во всю ширину — центральный текст съезжает вниз ровно
+  // на добавленную строку, иначе имя класса наедет на звёзды.
+  hudShiftY = (riskOn && starsOn && isPortrait()) ? 30 * z : 0;
 
   // Класс и порода (в портрете — под панелями, чтобы не наезжать)
   ctx.save();
@@ -923,10 +1030,10 @@ function drawHud(run) {
   ctx.textAlign = 'center';
   const cname = run.course.name || run.course.class.name;
   const modName = MODIFIERS[run.modifier]?.name;
-  ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, (isPortrait() ? 118 : 22) * z);
+  ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, (isPortrait() ? 118 : 22) * z + hudShiftY);
   if (modName) {
     ctx.fillStyle = '#ffab6b';
-    ctx.fillText(modName, w / 2, (isPortrait() ? 140 : 44) * z);
+    ctx.fillText(modName, w / 2, (isPortrait() ? 140 : 44) * z + hudShiftY);
   }
   ctx.restore();
 
@@ -1006,6 +1113,9 @@ function drawHud(run) {
   const m = run.activeMark;
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running') drawQte(run, m, z);
 
+  // Окно «чистого выхода» (S4.6) — скромный намёк у собаки, без баннеров
+  drawCleanExitHint(run, z);
+
   // Подсказка риска (S1): пока можно заявить (окно ещё не открыто, есть фокус) —
   // мигающая плашка «SHIFT / тап по хендлеру = риск ×2». SHIFT неочевиден без неё.
   if (m && m.qte && m.qte.state === 'active' && run.phase === 'running'
@@ -1056,7 +1166,7 @@ function drawCommentary(run, z) {
   const ctx = renderer.ctx, w = canvas.width;
   const inK = Math.min(1, line.t / 0.25);
   const outK = Math.min(1, Math.max(0, (line.life - line.t) / 0.4));
-  const y = (isPortrait() ? 168 : 72) * z;
+  const y = (isPortrait() ? 168 : 72) * z + hudShiftY;
   ctx.save();
   ctx.globalAlpha = Math.min(inK, outK);
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -2750,11 +2860,38 @@ function drawQte(run, m, z) {
   } else if (def.kind === 'holdRelease' && q.holding) {
     // Шкала движения по снаряду с жёлтой зоной — отпустить в зоне
     const bw = 300 * z;
+    const zr = q.zoneRed; // узкая overdrive-зона у самого края (S4.5), может не быть
+    const up = IS_TOUCH ? 'ВЕРХ' : '↑';
     gaugeBar(ctx, cx, cy, bw, q.progress, '#4fc3f7',
-      `Отпусти ${IS_TOUCH ? 'ВЕРХ' : '↑'} в жёлтой зоне!`, z);
+      zr ? `Отпусти ${up} в жёлтой · красная = жадный бонус`
+        : `Отпусти ${up} в жёлтой зоне!`, z);
     const zx = cx - bw / 2 + bw * def.zone[0], zw = bw * (def.zone[1] - def.zone[0]);
     ctx.fillStyle = 'rgba(244,196,48,0.85)';
     ctx.fillRect(zx, cy - 12 * z, zw, 24 * z);
+    // Красная зона рисуется ПОСЛЕ gaugeBar (иначе рамка перекроет) и поверх жёлтой.
+    // Пульс + косая штриховка + двойной контур: в колорблайнде её от жёлтой
+    // отличает форма, а не только цвет — это не «ошибка», а жадный бонус.
+    if (zr) {
+      const rx0 = cx - bw / 2 + bw * zr[0];
+      const rw = Math.max(3 * z, bw * (zr[1] - zr[0]));
+      const pl = 0.5 + 0.5 * Math.sin(run.time * 13);
+      const top = cy - 12 * z, hgt = 24 * z;
+      ctx.save();
+      ctx.fillStyle = `rgba(214,40,40,${0.55 + 0.35 * pl})`;
+      ctx.fillRect(rx0, top, rw, hgt);
+      ctx.beginPath(); ctx.rect(rx0, top, rw, hgt); ctx.clip();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
+      for (let sx = rx0 - hgt; sx < rx0 + rw + hgt; sx += 7 * z) {
+        ctx.beginPath(); ctx.moveTo(sx, cy + 12 * z); ctx.lineTo(sx + hgt, top); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(rx0, top, rw, hgt);
+      ctx.strokeStyle = `rgba(255,90,90,${0.4 + 0.6 * pl})`; ctx.lineWidth = 1.5;
+      ctx.strokeRect(rx0 - 3 * z, top - 4 * z, rw + 6 * z, hgt + 8 * z);
+      ctx.restore();
+    }
     const px = cx - bw / 2 + bw * q.progress;
     ctx.fillStyle = '#fff';
     ctx.fillRect(px - 2, cy - 18 * z, 4, 36 * z);

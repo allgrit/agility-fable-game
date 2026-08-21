@@ -4,8 +4,18 @@ import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } f
 import { computeSct, BREEDS } from './scoring.js';
 import { haptic } from './haptics.js';
 import { Commentator, temperamentFor } from './soul.js';
+import { createStars, obstacleValue } from './stars.js';
+import { makeRng } from './rng.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
+const BEAT_FALLBACK = 0.5;   // длительность «бита» без музыки (120 BPM) — для cue
+// S4.6 «Чистый выход»: сколько длится беззвучное окно тапа после приземления и
+// какой потолок у накопленной надбавки к множителю комбо. Потолок 0.2 = максимум
+// два удачных выхода: медали считаются от SCT, разгон сверх ~+15% к прежнему
+// пределу (1.35) обесценил бы старые времена трасс.
+const CLEAN_EXIT_WINDOW = 0.2;
+const CLEAN_EXIT_STEP = 0.1;
+const CLEAN_EXIT_CAP = 0.2;
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
   'spread', 'triple', 'serpentine']);
 
@@ -47,7 +57,7 @@ export class Run {
 
     // Дистанции входа/выхода снарядов вдоль пути: pathPoints = [start, e1,x1, e2,x2, ..., finish]
     this.marks = course.obstacles.map((o, i) => ({
-      o,
+      o, idx: i,
       entryD: this.path.pointDists[1 + i * 2],
       exitD: this.path.pointDists[2 + i * 2],
       qte: null, qteStart: 0, resolved: false,
@@ -82,6 +92,16 @@ export class Run {
     const maxFocus = 3 + (breed.ability === 'drive' ? 1 : 0);
     this.focus = { count: maxFocus, max: maxFocus, used: 0, perfectsSince: 0, regens: 0 };
     this._stubbornUsed = false; // джек: один сейв комбо за прогон
+    // S4.5: один детерминированный RNG на прогон для всех случайных исходов QTE
+    // (срыв в красной зоне). Math.random сделал бы автопилот-харнессы флаки.
+    this.rng = makeRng(((course.seed | 0) ^ 0x0BEA7) >>> 0);
+    this._qteRand = () => this.rng.next();
+    // S4.7 «Звёзды Punch-Out»: коронные снаряды трассы копят звёзды на Star Finish
+    this.stars = createStars(course);
+    // S4.6 «Чистый выход»: окно тапа на приземлении и накопленная надбавка к комбо
+    this.cleanExit = null;      // {until, used} — публичное поле для HUD
+    this.cleanExitBonus = 0;    // 0..CLEAN_EXIT_CAP, прибавка к comboMul()
+    this._lastAccelT = -99;     // когда слалом последний раз разгонял BPM
   }
 
   // Заявка риска на текущий press-снаряд: только ДО открытия окна.
@@ -162,6 +182,20 @@ export class Run {
         at: 1.0 + i * 2.0 + Math.random() * 1.2, dur: 0.35 + Math.random() * 0.25,
       }));
     }
+    if (type === 'aframe' || type === 'dogwalk') {
+      // S4.5 овердрайв: ширина красной зоны на самом краю контакта.
+      // Новичку край широкий — «поймать» его реально без снайперской точности;
+      // с классом зона сужается до иглы, а дождь делает край скользким и почти
+      // неуловимым. Множители перемножаются, ниже 0.4 не опускаемся.
+      const byCls = { novice: 1.4, open: 1.15, excellent: 0.9, masters: 0.7 }[cls] ?? 1;
+      const byMod = this.modifier === 'rain' ? 0.6 : 1;
+      // Сквозное правило эскалации: темп и сложность паттерна не растут вместе.
+      // Если слалом только что разогнал BPM — красная зона на ближайшем контакте
+      // ужимается вдвое, чтобы «быстрее» и «рискованнее» не сложились в одно окно.
+      const afterAccel = this.time - this._lastAccelT < 1.5 ? 0.5 : 1;
+      opts.overdriveScale = Math.max(0.4, byCls * byMod * afterAccel);
+      opts.rand = this._qteRand;
+    }
     if (type === 'weave') {
       opts.bpm = GROOVE_BPM[cls] || 112;
       opts.grooveWindows = GROOVE_WINDOWS[cls] || GROOVE_WINDOWS.open;
@@ -175,7 +209,11 @@ export class Run {
     return this.course.class.dogSpeed * this.breed.speedMul;
   }
 
-  comboMul() { return 1 + Math.min(0.35, this.score.combo * 0.045); }
+  // Множитель темпа: комбо + накопленные «чистые выходы» (S4.6, оба с потолком).
+  comboMul() {
+    return 1 + Math.min(0.35, this.score.combo * 0.045)
+      + Math.min(CLEAN_EXIT_CAP, this.cleanExitBonus);
+  }
 
   // ---------- ВВОД ----------
   input(key, isDown) {
@@ -193,10 +231,32 @@ export class Run {
       return;
     }
     const m = this.activeMark;
-    if (!m || !m.qte) return;
-    const t = this.time - m.qteStart;
-    const evs = isDown ? m.qte.press(key, t) : m.qte.release(key, t);
-    this._handleQteEvents(m, evs);
+    const qteActive = !!(m && m.qte && m.qte.state === 'active');
+    if (m && m.qte) {
+      const t = this.time - m.qteStart;
+      const evs = isDown ? m.qte.press(key, t) : m.qte.release(key, t);
+      this._handleQteEvents(m, evs);
+    }
+    // «Чистый выход» — самый низкий приоритет: ловит только те нажатия, которые
+    // никому больше не нужны (QTE ещё не начался или уже закрыт).
+    if (!qteActive && isDown) this._tryCleanExit();
+  }
+
+  // S4.6: тап в микро-окно приземления. Успел — +0.1 к множителю комбо;
+  // не успел — ничего: ни штрафа, ни подсказки. Награда «для своих».
+  _tryCleanExit() {
+    const w = this.cleanExit;
+    if (!w || w.used || this.time > w.until) return false;
+    w.used = true;
+    if (this.cleanExitBonus >= CLEAN_EXIT_CAP) return true; // потолок: эффекта нет
+    this.cleanExitBonus = Math.min(CLEAN_EXIT_CAP, this.cleanExitBonus + CLEAN_EXIT_STEP);
+    this.popups.push({ text: '✦ чисто', color: '#8fd8ff',
+      x: this.dog.x, y: this.dog.y - 1.6, t: 0, small: true });
+    this.fx.sparks(this.dog.x, this.dog.y, '#8fd8ff');
+    this.audio.click?.();
+    haptic('good');
+    this.emit({ type: 'cleanExit', bonus: this.cleanExitBonus });
+    return true;
   }
 
   // ---------- ЦИКЛ ----------
@@ -212,6 +272,7 @@ export class Run {
     if (this.flashT > 0) this.flashT -= rawDt;
     this.time += this.phase === 'running' ? dt : 0;
     this.audio.music?.speedFilter(this.dog.speed);
+    this._pushBeat();
 
     if (this.phase === 'countdown') {
       // Ритуал старта: полная тишина, собака дрожит в стойке, судья поднимает руку.
@@ -246,8 +307,30 @@ export class Run {
     this.popups = this.popups.filter(p => p.t < 1.1);
   }
 
+  // S4.1 «Мир дышит в бит»: бит-клок музыки → рендер. Рендер про музыку не знает,
+  // и пока beatOn=false рисует ровно как раньше — поэтому здесь же и гасим пульс
+  // (нет музыки, контекст спит, кадр-полароид).
+  _pushBeat() {
+    const mus = this.audio.music;
+    const on = !!(mus && mus.bpm > 0 && !this.photoReady);
+    this.r.beatOn = on;
+    if (!on) { this.r.beatPulse = 0; this.r.beatPhase = 0; return; }
+    const pulse = mus.pulse();
+    const phase = mus.beatPhase;
+    this.r.beatPulse = pulse >= 0 ? pulse : 0;
+    this.r.beatPhase = phase >= 0 ? phase : 0;
+  }
+
+  // Длительность доли текущего трека — база для аудио-cue и сбивок.
+  _beatDur() {
+    const bpm = this.audio.music?.bpm || 0;
+    return bpm > 0 ? 60 / bpm : BEAT_FALLBACK;
+  }
+
   _updateRunning(dt) {
     const d = this.dog;
+    // Окно чистого выхода живёт доли секунды — гасим, чтобы HUD не врал
+    if (this.cleanExit && this.time > this.cleanExit.until) this.cleanExit = null;
 
     // Активация QTE следующего снаряда: дистанция подобрана так, чтобы в момент
     // идеального нажатия (target) собака была в точке отталкивания ДО снаряда.
@@ -263,6 +346,20 @@ export class Run {
           nm.qteStart = this.time;
           nm.startDist = d.dist;
           nm.state.active = true;
+          // S4.4: тихая подсказка «что впереди» ровно за бит до идеального нажатия.
+          // target задан от qteStart (= this.time), так что delay = target − бит.
+          // Цель press-QTE потом дрейфует, но cue не обязан быть сэмпл-точным:
+          // его задача — успеть подготовить ухо, а не отбить тайминг.
+          if (!nm.cued) {
+            nm.cued = true;
+            this.audio.cue?.(nm.o.type, Math.max(0, nm.qte.target - this._beatDur()));
+          }
+          // S4.7: последний снаряд — взводим Star Finish, если есть чем бить
+          if (next === this.stars.finishIndex && this.stars.armFinish()) {
+            this.popups.push({ text: `★×${this.stars.count} ФИНИШ!`, color: '#ffd54a',
+              x: d.x, y: d.y - 3.4, t: 0 });
+            this.emit({ type: 'starFinishArmed', stars: this.stars.count });
+          }
           // Первая встреча со сложной механикой: slow-mo + инструкция.
           // Шина до Excellent — простой тап, её double-tap-хинт под ключом tire2.
           let hintKey = nm.o.type === 'tire' ? (nm.qte.noApex ? null : 'tire2') : nm.o.type;
@@ -329,6 +426,8 @@ export class Run {
     // Финишный спурт активируется, когда все снаряды пройдены
     if (!this.sprint.active && this.marks.every(mm => mm.resolved) && this.phase === 'running') {
       this.sprint.active = true;
+      // S4.4: сбивка объявляет финишный спурт — предупреждает, а не комментирует
+      this.audio.music?.drumFill(0);
       this.say('sprint');
       this.emit({ type: 'sprint' });
     }
@@ -551,9 +650,49 @@ export class Run {
           this.audio.chargeSound?.();
           break;
         // --- V4: groove ---
-        case 'accel':
+        case 'accel': {
           this.popups.push({ text: `Темп! ${e.bpm} BPM`, color: '#b388ff', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
           this.audio.cheer(false);
+          // S4.4: событие приходит уже ПО ФАКТУ разгона (qte меняет beat внутри),
+          // предупредить заранее нечем. Компромисс: сбивка ставится на ближайшую
+          // границу такта — она читается как «поехали дальше», а не как запоздалый
+          // комментарий, и не рвёт сетку посреди доли.
+          const mus = this.audio.music;
+          if (mus) {
+            const bar = this._beatDur() * 4;
+            const ph = mus.barPhase >= 0 ? mus.barPhase : 0;
+            mus.drumFill(Math.max(0, (1 - ph) * bar));
+          }
+          this._lastAccelT = this.time; // разводим разгон и новые механики (см. _qteOpts)
+          break;
+        }
+        // S4.2: спотыкание в слаломе — ритм сорвался, но бег продолжается.
+        // Фолтов нет, снаряд не провален: «награда за бит, не наказание за промах».
+        case 'stumble': {
+          const hadCombo = this.score.combo >= 3;
+          this.score.combo = 0;
+          if (hadCombo) { this.desatT = 0.4; this.audio.music?.dip(); }
+          this.audio.music?.setIntensity(Math.floor(this.score.combo));
+          this.fx.dust(this.dog.x, this.dog.y);
+          this.fx.dust(this.dog.x + 0.3, this.dog.y - 0.2);
+          this.slowT = Math.max(this.slowT, 0.25); // вдвое мягче, чем промах (0.6)
+          this.popups.push({ text: 'Сбилась!', color: '#ffab6b',
+            x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
+          this.r.kick(0, 2);
+          this.emit({ type: 'stumble' });
+          break;
+        }
+        // S4.5: овердрайв — отпустила на самом краю контакта и удержалась.
+        // Фидбек яркий, но заметно слабее Golden Weave: это не кульминация.
+        case 'overdrive':
+          this.popups.push({ text: '🔥 ОВЕРДРАЙВ ×1.5!', color: '#ff8a65',
+            x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
+          this.fx.sparks(this.dog.x, this.dog.y, '#ff8a65');
+          this.hitstop = 0.07;
+          this.r.zoomPunch();
+          haptic('perfect');
+          this.audio.reveal?.();
+          this.emit({ type: 'overdrive' });
           break;
         case 'restart':
           this.popups.push({ text: 'С первой стойки!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
@@ -694,6 +833,13 @@ export class Run {
       this.r.kick(Math.cos(d.heading) * 8, Math.sin(d.heading) * 6);
       d.sadT = 1.6;          // хвост поджат
       this.judgeArmT = 1.2;  // судья фиксирует фолт рукой
+      // Срыв в красной зоне (S4.5): без удара о доску читался бы как баг —
+      // добавляем слышимое падение к общему фидбеку промаха.
+      if (label === 'Сорвалась с контакта!') {
+        this.audio.slam?.();
+        this.fx.dust(d.x, d.y);
+        this.r.shake(0.7);
+      }
       const isKnock = (m.o.type === 'jump' || m.o.type === 'wall') && label !== 'Отказ!';
       if (isKnock) {
         m.state.knocked = true;
@@ -714,6 +860,47 @@ export class Run {
       }
       this.emit({ type: 'fault', faults });
     }
+    // S4.5: овердрайв даёт ×1.5 за снаряд. Цена снаряда — та же, по которой
+    // оценён риск ⚡ (+120 ≈ ×2), значит половина цены = ×1.5, одна весовая категория.
+    if (res.overdrive) {
+      const ob = Math.round(obstacleValue(this.marks.length) / 2);
+      this.bonusPoints += ob;
+      this.popups.push({ text: `+${ob}`, color: '#ff8a65', x: d.x + 1.2, y: d.y - 2.0, t: 0 });
+    }
+
+    // S4.7 «Звёзды Punch-Out». Порядок важен: сначала тратим накопленное на
+    // последнем снаряде (иначе miss сожжёт звёзды раньше, чем они сработают),
+    // и только потом обычный учёт коронных снарядов.
+    if (m.idx === this.stars.finishIndex && this.stars.isFinishArmed()) {
+      const fin = this.stars.spendOnFinish(grade);
+      if (fin.starsSpent > 0) {
+        this.bonusPoints += fin.bonus;
+        this.popups.push({ text: `★ FINISH ×${fin.multiplier}! +${fin.bonus}`, color: '#ffd54a',
+          x: d.x, y: d.y - 3.4, t: 0 });
+        this.fx.confettiBurst(d.x, d.y, 60, 'golden');
+        this.hitstop = Math.max(this.hitstop, 0.1);
+        this.slowmoT = Math.max(this.slowmoT, 0.25);
+        this.flashT = 0.2;
+        this.r.zoomPunch();
+        haptic('finish');
+        this.audio.fanfare();
+      } else if (fin.burned > 0) {
+        this.popups.push({ text: '★ погасли…', color: '#90a4ae', x: d.x, y: d.y - 3.4, t: 0 });
+      }
+      this.emit({ type: 'starFinish', ...fin });
+    }
+    const st = this.stars.onResult(m.idx, grade);
+    if (st.gained) {
+      this.popups.push({ text: `★ ${st.count}/${st.max}`, color: '#ffd54a',
+        x: d.x + 1.4, y: d.y - 3.0, t: 0 });
+      this.fx.sparks(d.x, d.y, '#ffd54a');
+      this.audio.reveal?.();
+      this.emit({ type: 'star', count: st.count, max: st.max, idx: st.idx });
+    } else if (st.burned) {
+      this.popups.push({ text: `★ −${st.burned}`, color: '#90a4ae', x: d.x + 1.4, y: d.y - 3.0, t: 0 });
+      this.emit({ type: 'starsBurned', burned: st.burned });
+    }
+
     this.emit({ type: 'grade', grade });
     this._comment(m, grade);
     this.audio.music?.setIntensity(Math.floor(this.score.combo));
@@ -841,6 +1028,11 @@ export class Run {
       this.fx.dust(d.x, d.y);
       this.fx.dust(d.x + 0.3, d.y);
       this.r.kick(0, 3);
+      // S4.6: приземление открывает беззвучное окно «чистого выхода».
+      // Новичку про него никто не говорит — пропустил и не заметил.
+      if (this.phase === 'running') {
+        this.cleanExit = { until: this.time + CLEAN_EXIT_WINDOW, used: false };
+      }
     }
     if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9); // ~1.1с блаженства
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
