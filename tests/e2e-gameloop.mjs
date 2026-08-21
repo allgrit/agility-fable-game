@@ -75,7 +75,10 @@ const PLAY = `(async (opts = {}) => {
   }
   run.finishT = 4;
   delete run.update;
-  await new Promise(r => setTimeout(r, 700));
+  await new Promise(r => setTimeout(r, 400));
+  // S3: чистый прогон уходит на победный круг и кадр-полароид — игрок их листает
+  A.skipCeremony();
+  await new Promise(r => setTimeout(r, 400));
   return {
     warmup: !!run.warmup,
     faults: run.score.faults, perfects: run.score.perfects, total: run.marks.length,

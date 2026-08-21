@@ -98,7 +98,9 @@ export class Renderer {
         const rnd = seed - Math.floor(seed);
         // Волна оваций расходится от позиции собаки (crowdFocusX)
         const dist = Math.abs(i - this.crowdFocusX);
-        const bounce = Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
+        // Овация победного круга (S3.3): зрители ВСТАЮТ — ряд поднимается целиком
+        const stand = this.crowdStanding ? 0.55 : 0;
+        const bounce = stand + Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
           // Вздрагивание всей трибуны при сильной тряске (сбитая планка)
           - (this.cam.shake > 0.3 ? 0.25 : 0);
         for (const yy of [off, field.h - off]) {
@@ -660,9 +662,15 @@ export class Renderer {
     ctx.translate(s.x, s.y);
     const flip = h.facing < 0 ? -1 : 1;
     ctx.scale(flip * z / 24, z / 24);
+    // Хендлер на коленях (S3.3): корпус оседает, ноги подогнуты, руки к собаке
+    if (h.kneel) ctx.translate(0, 9);
     // Ноги в беге
     ctx.strokeStyle = '#26415e'; ctx.lineWidth = 4; ctx.lineCap = 'round';
     for (const ph of [0, Math.PI]) {
+      if (h.kneel) { // колени: голень уходит назад, а не шагает
+        ctx.beginPath(); ctx.moveTo(0, 8); ctx.lineTo(-7 + (ph ? 3 : 0), 12); ctx.stroke();
+        continue;
+      }
       const sw = Math.sin(run + ph) * 0.8 * Math.min(1, h.speed / 4 + 0.2);
       ctx.beginPath(); ctx.moveTo(0, 8);
       ctx.lineTo(Math.sin(sw) * 6, 20); ctx.stroke();
@@ -675,7 +683,8 @@ export class Renderer {
     ctx.fill();
     // Руки (жестикуляция при команде)
     ctx.strokeStyle = shirt; ctx.lineWidth = 3.6;
-    const cmdArm = h.commanding ? -1.9 + Math.sin(this.time * 16) * 0.15 : Math.sin(run) * 0.7;
+    const cmdArm = h.kneel ? -0.5 + Math.sin(this.time * 5) * 0.2
+      : h.commanding ? -1.9 + Math.sin(this.time * 16) * 0.15 : Math.sin(run) * 0.7;
     ctx.beginPath(); ctx.moveTo(4, -5); ctx.lineTo(4 + Math.cos(cmdArm) * 9, -5 + Math.sin(cmdArm) * 9); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-4, -5); ctx.lineTo(-4 - Math.cos(run) * 5, -5 + Math.sin(run + Math.PI) * 6); ctx.stroke();
     // Голова

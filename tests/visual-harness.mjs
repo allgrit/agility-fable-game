@@ -100,6 +100,22 @@ const RUNNER = `(async (opts) => {
     const m2 = run.activeMark, q2 = m2 && m2.qte, t2 = q2 ? run.time - m2.qteStart : 0;
     if (pred(run, m2, q2, t2)) { run.update = () => {}; return { hit: true, time: +run.time.toFixed(2) }; }
   }
+  if (opts.lapT !== undefined) {
+    // S3: победный круг живёт уже в фазе finished — докручиваем физику вручную
+    let g2 = 0;
+    while (run.victoryLap && !run.victoryLap.done && run.victoryLap.t < opts.lapT && g2++ < 6000) {
+      proto.update.call(run, 1 / 60);
+    }
+    run.update = () => {};
+    return { hit: !!run.victoryLap, time: +run.time.toFixed(2) };
+  }
+  if (opts.photo) {
+    // Пропускаем круг: экран сам снимет кадр-полароид на ближайшем rAF
+    if (run.skipVictoryLap) run.skipVictoryLap();
+    run.update = () => {};
+    await new Promise(r => setTimeout(r, 900));
+    return { hit: window.__agility.app.state === 'photo' };
+  }
   if (opts.thenFinishT !== undefined) {
     // update остаётся замороженным — иначе finishT растёт в реальном времени и этап уплывает
     run.finishT = opts.thenFinishT;
@@ -273,6 +289,16 @@ const SCENES = [
     predicate: "run.phase === 'countdown' && run.countdownT < 1.0 && run.dog.pose === 'bow'",
     criteria: 'Темперамент шелти (S3.7): на ритуале старта собака в ПОКЛОНЕ-потягушке — корпус наклонён вперёд-вниз, морда у земли; надпись «На старт…» и плашка приглашения погладить на месте.',
   },
+  {
+    name: '41-victory-lap', mode: 'career', cls: 'novice', stage: 1, lapT: 2.0,
+    predicate: 'false',
+    criteria: 'Победный круг (S3.3): собака мчится вдоль ближней трибуны с высунутым языком, зрители ВСТАЛИ (ряд поднят выше обычного), хендлер рядом на коленях с поднятыми руками, в воздухе конфетти. HUD ещё виден, протокол судьи НЕ показан.',
+  },
+  {
+    name: '42-photo-finish', mode: 'career', cls: 'novice', stage: 1, photo: true,
+    predicate: 'false',
+    criteria: 'Фото-финиш (S3.3): на тёмном фоне заголовок «📸 ФОТО-ФИНИШ» и бумажный ПОЛАРОИД с наклоном — сверху кадр сцены, снизу рукописная подпись «Хлоя · NN.NNс», строка титула и трассы, мелкие «🐕 Agility Trial!» и дата; под карточкой кнопки «📤 Поделиться» и жёлтая «▶ К протоколу».',
+  },
 ];
 
 const manifest = [];
@@ -280,7 +306,7 @@ for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
     mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx, pet: sc.pet,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
-    riskFirst: sc.riskFirst, testDrive: sc.testDrive,
+    riskFirst: sc.riskFirst, testDrive: sc.testDrive, lapT: sc.lapT, photo: sc.photo,
   })})`);
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)

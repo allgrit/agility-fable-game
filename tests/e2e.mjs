@@ -112,6 +112,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     const errs = (${AUTOPILOT})(run, proto);
     run.finishT = 2;
     delete run.update;
+    A.skipCeremony(); // S3: победный круг и кадр-полароид чистого прогона
     await new Promise(r => setTimeout(r, 1500));
     return {
       errs, faults: run.score.faults, perfects: run.score.perfects, total: run.marks.length,
@@ -258,6 +259,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     const faultsInWarmup = run.score.faults;
     run.finishT = 1.5;
     delete run.update;
+    A.skipCeremony(); // S3: победный круг и кадр-полароид чистого прогона
     await new Promise(r => setTimeout(r, 300));
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
     await new Promise(r => setTimeout(r, 300));
@@ -299,6 +301,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     }
     run.finishT = 4;
     delete run.update;
+    A.skipCeremony(); // S3: победный круг и кадр-полароид чистого прогона
     await new Promise(r => setTimeout(r, 700));
     const meta1 = JSON.parse(localStorage.getItem('agility_meta'));
     // Магазин: купить красную бандану напрямую через ячейки
@@ -482,6 +485,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     }
     run.finishT = 4; // сразу к финальному состоянию протокола
     delete run.update;
+    A.skipCeremony(); // S3: победный круг и кадр-полароид чистого прогона
     await new Promise(r => setTimeout(r, 600));
     if (A.app.state !== 'results') return { error: 'not results: ' + A.app.state };
     const c = document.getElementById('game');
@@ -523,6 +527,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
     }
     run.finishT = 4;
     delete run.update;
+    A.skipCeremony(); // S3: победный круг и кадр-полароид чистого прогона
     await new Promise(r => setTimeout(r, 700));
   })()`);
   await shot(page, 'mobile-results');

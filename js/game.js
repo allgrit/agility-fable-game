@@ -236,7 +236,7 @@ export class Run {
     }
 
     if (this.phase === 'running') this._updateRunning(dt);
-    if (this.phase === 'finished') this.finishT += dt;
+    if (this.phase === 'finished') { this.finishT += dt; this._updateVictoryLap(dt); }
 
     this._updateDogPose(dt);
     this._updateHandler(dt);
@@ -427,11 +427,48 @@ export class Run {
       else this.audio.sad();
       this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
       this.say(clean ? 'finishClean' : 'finishFault', { t: this.time.toFixed(2) });
-      // Выходка на финише: джек драматично падает, пудель крутит пируэт (S3.7)
-      if (this.temper.quirk === 'faint') { d.pose = 'faint'; this.quirkT = 0; }
-      else if (this.temper.quirk === 'pirouette' && clean) { d.pose = 'pirouette'; this.quirkT = 0; }
+      // Победный круг (S3.3): только за чистый прогон — 3.4с вдоль трибун,
+      // зрители встают, хендлер падает на колени, дальше кадр-полароид.
+      if (clean && !this.warmup) {
+        this.victoryLap = { t: 0, dur: 3.4, done: false, dir: 1 };
+        this.r.crowdStanding = true;
+      } else {
+        // Выходка на финише: джек драматично падает, пудель крутит пируэт (S3.7)
+        if (this.temper.quirk === 'faint') { d.pose = 'faint'; this.quirkT = 0; }
+      }
       this.emit({ type: 'finish' });
     }
+  }
+
+  // Победный круг: собака мчится вдоль трибуны, хендлер на коленях, конфетти.
+  // По завершении выставляется photoReady — экран снимает кадр-полароид.
+  _updateVictoryLap(dt) {
+    const lap = this.victoryLap;
+    if (!lap || lap.done) return;
+    lap.t += dt;
+    this.handler.kneel = lap.t > 1.0;      // хендлер опускается на колени
+    this.audio.crowdLevel(1);
+    this._lapFx = (this._lapFx || 0) + dt;
+    if (this._lapFx > 0.5) {               // ленты вдоль круга
+      this._lapFx = 0;
+      this.fx.confettiBurst(this.dog.x, this.dog.y - 1, 18, this.breed.finishFx || null);
+    }
+    if (lap.t >= lap.dur) {
+      lap.done = true;
+      this.photoReady = true;
+      // Выходка темперамента приберегается на кадр: пируэт/падение в объектив
+      if (this.temper.quirk === 'pirouette') { this.dog.pose = 'pirouette'; this.quirkT = 0; }
+      else if (this.temper.quirk === 'faint') { this.dog.pose = 'faint'; this.quirkT = 0; }
+    }
+  }
+
+  // Пропуск круга по вводу игрока: сразу к кадру
+  skipVictoryLap() {
+    const lap = this.victoryLap;
+    if (!lap || lap.done) return false;
+    lap.t = lap.dur;
+    this._updateVictoryLap(0);
+    return true;
   }
 
   _waitPoint(m) {
@@ -745,6 +782,30 @@ export class Run {
   // ---------- ПОЗА СОБАКИ ----------
   _updateDogPose(dt) {
     const d = this.dog;
+    // Победный круг: собака идёт не по сплайну, а вдоль ближней трибуны
+    const lap = this.victoryLap;
+    if (lap && !lap.done) {
+      const fw = this.course.field.w;
+      if (d.x > fw - 4) lap.dir = -1;
+      if (d.x < 4) lap.dir = 1;
+      const v = 7.0;
+      d.x += v * dt * lap.dir;
+      d.y += (2.8 - d.y) * Math.min(1, dt * 1.4);
+      d.heading = lap.dir > 0 ? 0 : Math.PI;
+      d.speed = v;
+      d.runPhase += v * dt * 2.2;
+      d.happy = true;
+      d.elevation = 0; d.airborne = false; d.hidden = false;
+      this.r.crowdFocusX = d.x;
+      this._pawAcc = (this._pawAcc || 0) + v * dt;
+      if (this._pawAcc > 0.9) { this._pawAcc = 0; this.fx.paw(d.x, d.y, d.heading, this.breed.pawColor || null); }
+      if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9);
+      return;
+    }
+    if (d.pose === 'faint' || d.pose === 'pirouette') {
+      this.quirkT = (this.quirkT || 0) + dt;
+      d.poseK = Math.min(1, this.quirkT / 0.8);
+    }
     const p = this.path.pointAt(d.dist);
     const tg = this.path.tangentAt(d.dist);
     // Боковое виляние в слаломе: собака зигзагом обходит стойки в такт битам —
@@ -782,11 +843,6 @@ export class Run {
       this.r.kick(0, 3);
     }
     if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9); // ~1.1с блаженства
-    // Прогресс финишной выходки темперамента: 0 → 1 за 0.8с, дальше держится
-    if (d.pose === 'faint' || d.pose === 'pirouette') {
-      this.quirkT = (this.quirkT || 0) + dt;
-      d.poseK = Math.min(1, this.quirkT / 0.8);
-    }
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
     if (d.popT > 0) d.popT = Math.max(0, d.popT - dt * 5); // ~0.2с пружина perfect
 
@@ -828,6 +884,18 @@ export class Run {
 
   _updateHandler(dt) {
     const h = this.handler, d = this.dog;
+    // Победный круг: хендлер держится рядом с собакой, а не на сплайне
+    if (this.victoryLap) {
+      const tx2 = d.x - Math.cos(d.heading) * 2.6, ty2 = d.y + 1.8;
+      const k2 = Math.min(1, dt * 2.2);
+      const nx2 = h.x + (tx2 - h.x) * k2, ny2 = h.y + (ty2 - h.y) * k2;
+      h.speed = Math.hypot(nx2 - h.x, ny2 - h.y) / Math.max(dt, 1e-6);
+      h.facing = (nx2 - h.x) >= 0 ? 1 : -1;
+      h.x = nx2; h.y = ny2;
+      h.runPhase += h.speed * dt * 2.4;
+      if (h.speech) { h.speech.t += dt; if (h.speech.t > 1.6) h.speech = null; }
+      return;
+    }
     // Хендлер бежит параллельно, ближе к центру поля, чуть позади.
     const behind = this.path.pointAt(Math.max(0, d.dist - 1.6));
     const tg = this.path.tangentAt(Math.max(0, d.dist - 1.6));
@@ -849,7 +917,9 @@ export class Run {
 
   _updateCamera(dt) {
     const cam = this.r.cam;
-    const ahead = this.path.pointAt(Math.min(this.path.length, this.dog.dist + 3.5));
+    const lap = this.victoryLap;
+    const ahead = lap ? { x: this.dog.x, y: this.dog.y }
+      : this.path.pointAt(Math.min(this.path.length, this.dog.dist + 3.5));
     const tx = (this.dog.x * 0.55 + ahead.x * 0.45);
     const ty = (this.dog.y * 0.55 + ahead.y * 0.45);
     const k = Math.min(1, dt * 3.5);
