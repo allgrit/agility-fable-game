@@ -11,6 +11,21 @@ export class Renderer {
     this.time = 0;
     this.theme = { outer: '#1d5c30', grass: '#2e7d43', stripeAlpha: 0.05, overlay: null, lights: false };
     this.crowdFocusX = 26; // волна толпы расходится от позиции собаки
+    // Пульс мира в бит (S4). Значения выставляет игровой слой снаружи — рендер
+    // ничего не знает про музыку. Пока beatOn=false, картинка ровно прежняя.
+    this.beatPulse = 0; // 1 сразу после доли, спад к 0 к следующей
+    this.beatPhase = 0; // непрерывная доля текущей четверти 0..1
+    this.beatOn = false;
+  }
+
+  // Значение пульса со сдвигом фазы off (0..1). Возвращает строго 0, если бита нет
+  // или поля не выставлены/NaN — так любая формула ниже вырождается в исходную.
+  _beat(off = 0) {
+    if (!this.beatOn) return 0;
+    if (!off) { const p = this.beatPulse; return p > 0 ? Math.min(1, p) : 0; }
+    const ph = this.beatPhase;
+    if (!(ph >= 0)) return 0;
+    return 1 - ((ph + off) % 1); // та же пила, но со сдвигом по фазе
   }
 
   resize(w, h) { this.canvas.width = w; this.canvas.height = h; }
@@ -45,10 +60,11 @@ export class Renderer {
     const th = this.theme;
     ctx.fillStyle = th.outer;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    // Полосы газона
+    // Полосы газона (альфа едва дышит в бит — подсознательный метроном)
+    const gb = this._beat();
     for (let i = 0; i < field.w; i += 4) {
       const a = this.toScreen(i, 0), b = this.toScreen(Math.min(i + 2, field.w), field.h);
-      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha * 0.9})`;
+      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha * 0.9 * (1 + gb * 0.12)})`;
       ctx.fillRect(a.x, this.toScreen(0, -3).y, b.x - a.x, this.toScreen(0, field.h + 6).y - this.toScreen(0, -3).y);
     }
     // Ринг с кромкой
@@ -57,22 +73,25 @@ export class Renderer {
     ctx.fillRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
     for (let i = 0; i < field.w; i += 4) {
       const a = this.toScreen(i, 0), b = this.toScreen(Math.min(i + 2, field.w), field.h);
-      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha})`;
+      ctx.fillStyle = `rgba(255,255,255,${th.stripeAlpha * (1 + gb * 0.12)})`;
       ctx.fillRect(a.x, p0.y, b.x - a.x, p1.y - p0.y);
     }
     // Прожекторы вечернего турнира
     if (th.lights) {
-      for (const lx of [field.w * 0.2, field.w * 0.45, field.w * 0.7, field.w * 0.92]) {
-        const s = this.toScreen(lx, field.h * 0.45);
+      const lxs = [field.w * 0.2, field.w * 0.45, field.w * 0.7, field.w * 0.92];
+      for (let li = 0; li < lxs.length; li++) {
+        const s = this.toScreen(lxs[li], field.h * 0.45);
         const r = this.cam.zoom * 7;
         const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r);
-        g.addColorStop(0, 'rgba(255,245,200,0.13)');
+        // Каждый прожектор дышит со своей фазой — свет «переливается» по долям
+        g.addColorStop(0, `rgba(255,245,200,${0.13 * (1 + this._beat(li * 0.25) * 0.06)})`);
         g.addColorStop(1, 'rgba(255,245,200,0)');
         ctx.fillStyle = g;
         ctx.fillRect(s.x - r, s.y - r, r * 2, r * 2);
       }
     }
-    ctx.strokeStyle = '#ffffff';
+    // Кромка ринга: в долю чуть ярче (при выключенном бите — прежний '#ffffff')
+    ctx.strokeStyle = gb ? `rgba(255,255,255,${1 - 0.05 + gb * 0.05})` : '#ffffff';
     ctx.lineWidth = Math.max(2, this.cam.zoom * 0.06);
     ctx.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
     this._drawCrowd(field, crowdHype);
@@ -100,7 +119,11 @@ export class Renderer {
         const dist = Math.abs(i - this.crowdFocusX);
         // Овация победного круга (S3.3): зрители ВСТАЮТ — ряд поднимается целиком
         const stand = this.crowdStanding ? 0.55 : 0;
+        // Качание в долю: у каждого зрителя свой микросдвиг фазы (rnd), иначе
+        // трибуна марширует строем. При выключенном бите слагаемое ровно 0.
+        const beat = this._beat(rnd * 0.14) * (0.05 + rnd * 0.03);
         const bounce = stand + Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
+          + beat
           // Вздрагивание всей трибуны при сильной тряске (сбитая планка)
           - (this.cam.shake > 0.3 ? 0.25 : 0);
         for (const yy of [off, field.h - off]) {
@@ -140,9 +163,10 @@ export class Renderer {
   // ---------- СНАРЯДЫ ----------
   _shadow(x, y, r) {
     const s = this.toScreen(x, y);
+    const rz = r * this.cam.zoom * (1 - this._beat() * 0.02); // едва заметное сжатие в долю
     this.ctx.fillStyle = 'rgba(0,0,0,0.22)';
     this.ctx.beginPath();
-    this.ctx.ellipse(s.x, s.y, r * this.cam.zoom, r * this.cam.zoom * 0.4, 0, 0, Math.PI * 2);
+    this.ctx.ellipse(s.x, s.y, rz, rz * 0.4, 0, 0, Math.PI * 2);
     this.ctx.fill();
   }
 
@@ -668,9 +692,10 @@ export class Renderer {
 
   _shadowDog(x, y, k) {
     const s = this.toScreen(x, y);
+    const kb = k * (1 - this._beat() * 0.02); // пульс поверх масштаба от прыжка, не вместо него
     this.ctx.fillStyle = 'rgba(0,0,0,0.28)';
     this.ctx.beginPath();
-    this.ctx.ellipse(s.x, s.y, this.cam.zoom * 0.55 * k, this.cam.zoom * 0.22 * k, 0, 0, Math.PI * 2);
+    this.ctx.ellipse(s.x, s.y, this.cam.zoom * 0.55 * kb, this.cam.zoom * 0.22 * kb, 0, 0, Math.PI * 2);
     this.ctx.fill();
   }
 

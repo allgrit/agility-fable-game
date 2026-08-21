@@ -249,6 +249,45 @@ export class AudioEngine {
     }
   }
 
+  // ---- S4: аудио-cue снарядов ----
+  // Тихая ритмическая подсказка «что впереди», планируемая за бит до окна QTE.
+  // Это НЕ voice(): голос хендлера — команда в момент действия, cue — намёк
+  // заранее, поэтому он заметно тише и не должен забивать музыку. На скорости
+  // уши разгружают глаза: тембр читается раньше, чем снаряд опознан визуально.
+  cue(type, delay = 0) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime + Math.max(0, delay);
+    const tone = (f0, f1, at, dur, peak = 0.06) =>
+      this._osc('sine', f0, t + at, dur, peak, null, f1);
+    switch (type) {
+      // Барьерные — короткий свисток вверх: «оттолкнись»
+      case 'jump': case 'wall': case 'broad': tone(1500, 1900, 0, 0.07, 0.055); break;
+      // Шина — упругий дубль с «отскоком» питча
+      case 'tire': tone(1250, 1500, 0, 0.05, 0.05); tone(1500, 1250, 0.08, 0.06, 0.045); break;
+      // Качели — скрип: узкополосный шум + сползающий тон
+      case 'seesaw':
+        this._osc('sawtooth', 520, t, 0.16, 0.035, null, 380);
+        this._noiseBurst(t, 0.16, 0.03, 900, 6); break;
+      // Туннель — гулкий низ с длинным хвостом
+      case 'tunnel': tone(300, 200, 0, 0.22, 0.06); this._noiseBurst(t, 0.2, 0.025, 350, 0.7); break;
+      // Заряд — низкий рокот, копящийся вверх
+      case 'spread': case 'triple':
+        this._osc('sawtooth', 90, t, 0.24, 0.05, null, 160); break;
+      // Слалом/серпантин — тик-лесенка, сразу слышен «счёт стоек»
+      case 'weave': case 'serpentine':
+        for (let i = 0; i < 3; i++) this._osc('square', 900 + i * 160, t + i * 0.07, 0.035, 0.04);
+        break;
+      // Стол — глухой удар «стоп»
+      case 'table': tone(180, 120, 0, 0.12, 0.07); this._noiseBurst(t, 0.07, 0.03, 220, 1); break;
+      // Контактные — шорох лап по покрытию
+      case 'aframe': case 'dogwalk':
+        this._noiseBurst(t, 0.18, 0.04, 2600, 0.8);
+        this._osc('triangle', 420, t, 0.14, 0.03, null, 620); break;
+      // Неизвестный тип — нейтральный тик, чтобы подсказка не пропала совсем
+      default: this._osc('triangle', 880, t, 0.05, 0.045);
+    }
+  }
+
   crowdRoar(v = 0.5) {
     if (!this.ctx) return;
     this._noiseBurst(this.ctx.currentTime, 0.4, 0.06 + v * 0.1, 700, 0.4);

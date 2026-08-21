@@ -85,13 +85,14 @@ test('QTE groove (слалом-ритм): 12 битов в темп → perfect 
   assert.equal(q.beatGrades[0], 'good');
 });
 
-test('QTE groove: 3 промаха = возврат на 1-ю стойку без фолтов', () => {
+test('QTE groove: серия промахов = возврат на 1-ю стойку без фолтов', async () => {
+  const { WEAVE_MISS_STREAK } = await import('../js/qte.js');
   const d = QTE_DEFS.weave;
   const q = new Qte('weave', { bpm: 120, grooveWindows: { p: 0.06, g: 0.11, o: 0.16 } });
   q.update(0.01);
-  // Три подряд неверные клавиши = 3 miss
+  // Промахи ПОДРЯД (S4): одиночные больше не копятся к рестарту
   let evs = [];
-  for (let i = 0; i < 3; i++) evs.push(...q.press('Space', q.nextBeatT ?? q.target));
+  for (let i = 0; i < WEAVE_MISS_STREAK; i++) evs.push(...q.press('Space', q.nextBeatT ?? q.target));
   assert.ok(evs.some(e => e.type === 'restart'));
   assert.equal(q.beatIdx, 0, 'вернулась на 1-ю стойку');
   assert.equal(q.state, 'active', 'слалом продолжается');
@@ -103,7 +104,8 @@ test('QTE groove: 3 промаха = возврат на 1-ю стойку бе�
   assert.equal(q.result.faults, 0);
 });
 
-test('QTE groove: рестарт сбрасывает разгон BPM, кламп на 168', () => {
+test('QTE groove: рестарт сбрасывает разгон BPM, кламп на 168', async () => {
+  const { WEAVE_MISS_STREAK } = await import('../js/qte.js');
   const d = QTE_DEFS.weave;
   const opts = { bpm: 144, grooveWindows: { p: 0.045, g: 0.085, o: 0.125 } };
   let q = new Qte('weave', opts);
@@ -112,8 +114,8 @@ test('QTE groove: рестарт сбрасывает разгон BPM, клам
   let t = q.target;
   for (let i = 0; i < 4; i++) { q.press(d.keys[i % 2], t); t = q.nextBeatT; }
   assert.ok(q.beat < q.baseBeat, 'разгон применился');
-  // 3 промаха → возврат: темп вернулся к исходному
-  for (let i = 0; i < 3; i++) q.press('Space', q.nextBeatT);
+  // Серия промахов подряд → возврат: темп вернулся к исходному
+  for (let i = 0; i < WEAVE_MISS_STREAK; i++) q.press('Space', q.nextBeatT);
   assert.equal(q.beat, q.baseBeat, 'рестарт сбросил разгон');
   // Кламп: даже бесконечный разгон не уводит выше 168 BPM
   q = new Qte('weave', { ...opts, accelEvery: 1 });
@@ -739,4 +741,195 @@ test('досье: любимый снаряд по доле перфектов, 
   assert.equal(dogName(meta, { id: 'aussie', name: 'Хлоя' }), 'Хлоя');
   meta.dogs.aussie = { name: 'Мурзик' };
   assert.equal(dogName(meta, { id: 'aussie', name: 'Хлоя' }), 'Мурзик');
+});
+
+// ---------- S4 «Ритм-мир» ----------
+const GW = { p: 0.06, g: 0.11, o: 0.16 };
+
+// Прогон слалома по сценарию: 'x' — промах (не та клавиша), '.' — перфект в бит.
+// Возвращает все события; жмём ровно в nextBeatT, чтобы тайминг был идеален.
+function weaveRun(q, plan) {
+  const d = QTE_DEFS.weave;
+  const evs = [];
+  for (const step of plan) {
+    if (q.state === 'done') break;
+    const t = q.nextBeatT;
+    evs.push(...q.press(step === 'x' ? 'Space' : d.keys[q.beatIdx % 2], t));
+  }
+  return evs;
+}
+
+test('S4 слалом: одиночный промах не роняет флоу — stumble вместо restart', async () => {
+  const { WEAVE_MISS_STREAK } = await import('../js/qte.js');
+  const d = QTE_DEFS.weave;
+  const q = new Qte('weave', { bpm: 120, grooveWindows: GW });
+  q.update(0.01);
+  // Один промах, дальше чисто до конца — слалом ни разу не откатывается
+  const evs = weaveRun(q, ['x', ...Array(d.beats - 1).fill('.')]);
+  assert.ok(evs.some(e => e.type === 'stumble' && e.i === 0), 'промах эмитит stumble');
+  assert.ok(!evs.some(e => e.type === 'restart'), 'одиночный промах не откатывает');
+  assert.equal(q.restarts, 0);
+  assert.equal(q.state, 'done', 'слалом дошёл до конца');
+  assert.equal(q.result.faults, 0, 'промах в слаломе не даёт фолтов');
+  assert.ok(!q.result.golden, 'со спотыканием golden не даётся');
+  assert.ok(WEAVE_MISS_STREAK >= 3, 'порог серии промахов экспортируется');
+});
+
+test('S4 слалом: N промахов ПОДРЯД = restart со сбросом BPM на базовый', async () => {
+  const { WEAVE_MISS_STREAK } = await import('../js/qte.js');
+  const d = QTE_DEFS.weave;
+  const q = new Qte('weave', { bpm: 144, grooveWindows: GW, accelEvery: 2 });
+  q.update(0.01);
+  // Сначала разгон перфектами, затем серия промахов подряд
+  weaveRun(q, Array(4).fill('.'));
+  assert.ok(q.beat < q.baseBeat, 'разгон применился');
+  const evs = weaveRun(q, Array(WEAVE_MISS_STREAK).fill('x'));
+  assert.ok(evs.some(e => e.type === 'restart'), 'серия промахов = restart');
+  assert.equal(q.beatIdx, 0, 'вернулась на 1-ю стойку');
+  assert.equal(q.beat, q.baseBeat, 'BPM сброшен на базовый');
+  assert.equal(q.missCount, 0, 'счётчик подряд обнулён');
+  assert.equal(q.restarts, 1);
+  assert.equal(q.state, 'active', 'слалом продолжается');
+  // На один промах меньше — рестарта нет
+  const q2 = new Qte('weave', { bpm: 144, grooveWindows: GW });
+  q2.update(0.01);
+  const evs2 = weaveRun(q2, Array(WEAVE_MISS_STREAK - 1).fill('x'));
+  assert.ok(!evs2.some(e => e.type === 'restart'), 'N-1 промахов подряд ещё не провал');
+});
+
+test('S4 слалом: промахи вразбивку не дают restart, но и golden не дают', async () => {
+  const { WEAVE_MISS_STREAK } = await import('../js/qte.js');
+  const d = QTE_DEFS.weave;
+  const q = new Qte('weave', { bpm: 120, grooveWindows: GW });
+  q.update(0.01);
+  // Чередование промах/перфект: промахов сильно больше порога, но не подряд
+  const plan = Array.from({ length: d.beats }, (_, i) => (i % 2 === 0 ? 'x' : '.'));
+  const misses = plan.filter(s => s === 'x').length;
+  assert.ok(misses > WEAVE_MISS_STREAK, 'в сценарии промахов больше порога');
+  const evs = weaveRun(q, plan);
+  assert.ok(!evs.some(e => e.type === 'restart'), 'вразбивку рестарта быть не должно');
+  assert.equal(evs.filter(e => e.type === 'stumble').length, misses);
+  assert.equal(q.restarts, 0);
+  assert.equal(q.missTotal, misses, 'суммарные промахи считаются отдельно');
+  assert.equal(q.state, 'done');
+  assert.equal(q.result.faults, 0);
+  assert.ok(!q.result.golden);
+});
+
+test('S4 слалом: golden только за идеальный проход', () => {
+  const d = QTE_DEFS.weave;
+  const clean = new Qte('weave', { bpm: 120, grooveWindows: GW });
+  clean.update(0.01);
+  const evs = weaveRun(clean, Array(d.beats).fill('.'));
+  assert.ok(clean.result.golden, 'чистый проход = GOLDEN WEAVE');
+  assert.ok(evs.some(e => e.type === 'golden'));
+  // Один промах — golden нет, но и не ноль очков
+  const stumbled = new Qte('weave', { bpm: 120, grooveWindows: GW });
+  stumbled.update(0.01);
+  weaveRun(stumbled, ['.', 'x', ...Array(d.beats - 2).fill('.')]);
+  assert.ok(!stumbled.result.golden);
+  assert.ok(stumbled.result.score > 0, 'промах не обнуляет результат');
+  assert.equal(stumbled.result.grade, 'late');
+});
+
+test('S4 овердрайв: жёлтая зона работает как раньше, без overdrive', () => {
+  const d = QTE_DEFS.aframe;
+  const q = new Qte('aframe');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  const mid = (d.zone[0] + d.zone[1]) / 2;
+  q.update(q.target + d.travel * mid);
+  q.release('ArrowUp', q.target + d.travel * mid);
+  assert.equal(q.result.grade, 'perfect');
+  assert.equal(q.result.faults, 0);
+  assert.ok(!q.result.overdrive, 'жёлтая зона овердрайв не даёт');
+  // Край жёлтой зоны — good, тоже без овердрайва
+  const q2 = new Qte('aframe');
+  q2.update(0.01);
+  q2.press('ArrowUp', q2.target);
+  const edge = d.zone[0] + (d.zone[1] - d.zone[0]) * 0.05;
+  q2.update(q2.target + d.travel * edge);
+  q2.release('ArrowUp', q2.target + d.travel * edge);
+  assert.equal(q2.result.grade, 'good');
+  assert.ok(!q2.result.overdrive);
+});
+
+// Отпускание в красной зоне на заданной доле прогресса
+function releaseAt(type, p, opts = {}) {
+  const d = QTE_DEFS[type];
+  const q = new Qte(type, opts);
+  q.update(0.01);
+  q.press(d.key, q.target);
+  const t = q.target + d.travel * p;
+  q.update(t);
+  q.release(d.key, t);
+  return q;
+}
+
+test('S4 овердрайв: красная зона — perfect ×1.5 при удаче, срыв при неудаче', () => {
+  const d = QTE_DEFS.aframe;
+  assert.ok(Array.isArray(d.zoneRed), 'у горки есть красная зона');
+  assert.ok(d.zoneRed[0] >= d.zone[1] && d.zoneRed[1] <= 1, 'красная за жёлтой, внутри (0..1]');
+  assert.ok(d.zoneRed[1] - d.zoneRed[0] < (d.zone[1] - d.zone[0]) / 2, 'красная ощутимо уже жёлтой');
+
+  const mid = (d.zoneRed[0] + d.zoneRed[1]) / 2;
+  // rand выше порога срыва → награда
+  const win = releaseAt('aframe', mid, { rand: () => 0.99 });
+  assert.equal(win.result.grade, 'perfect');
+  assert.equal(win.result.faults, 0);
+  assert.equal(win.result.overdrive, true);
+
+  // rand ниже порога → срыв с фолтами
+  const lose = releaseAt('aframe', mid, { rand: () => 0.01 });
+  assert.equal(lose.result.grade, 'miss');
+  assert.equal(lose.result.faults, 5);
+  assert.ok(!lose.result.overdrive);
+  assert.match(lose.result.label, /Сорвалась/);
+
+  // Риск настраивается: risk=0 — срыва не бывает, risk=1 — всегда
+  assert.equal(releaseAt('aframe', mid, { rand: () => 0, overdriveRisk: 0 }).result.overdrive, true);
+  assert.equal(releaseAt('aframe', mid, { rand: () => 0.99, overdriveRisk: 1 }).result.grade, 'miss');
+  // Бум тоже умеет овердрайв
+  const dw = QTE_DEFS.dogwalk;
+  assert.ok(Array.isArray(dw.zoneRed));
+  assert.equal(releaseAt('dogwalk', (dw.zoneRed[0] + dw.zoneRed[1]) / 2,
+    { rand: () => 0.99 }).result.overdrive, true);
+});
+
+test('S4 овердрайв: overdriveScale сужает красную зону, дефолт детерминирован', () => {
+  const d = QTE_DEFS.aframe;
+  const base = new Qte('aframe');
+  const narrow = new Qte('aframe', { overdriveScale: 0.5 });
+  const w0 = base.zoneRed[1] - base.zoneRed[0];
+  const w1 = narrow.zoneRed[1] - narrow.zoneRed[0];
+  assert.ok(Math.abs(w1 - w0 * 0.5) < 1e-9, `зона сузилась вдвое: ${w1} vs ${w0}`);
+  assert.ok(narrow.zoneRed[0] > base.zoneRed[0], 'нижняя граница поднялась');
+  assert.ok(narrow.zoneRed[0] >= d.zone[1] && narrow.zoneRed[1] <= 1, 'зона внутри (0..1]');
+  // При суженной зоне точка, которая была красной, попадает уже в жёлтую
+  const p = base.zoneRed[0] + w0 * 0.25;
+  assert.ok(p < narrow.zoneRed[0]);
+  const q = releaseAt('aframe', p, { overdriveScale: 0.5, rand: () => 0.01 });
+  assert.notEqual(q.result.grade, 'miss', 'вне красной зоны срыв не разыгрывается');
+  assert.ok(!q.result.overdrive);
+  // Расширение не наезжает на жёлтую
+  const wide = new Qte('aframe', { overdriveScale: 5 });
+  assert.ok(wide.zoneRed[0] >= d.zone[1], 'красная не залезает в жёлтую');
+});
+
+test('S4 овердрайв: до зоны — «Мимо зоны!», перебор за красную — по-прежнему late', () => {
+  const d = QTE_DEFS.aframe;
+  const early = releaseAt('aframe', 0.3, { rand: () => 0.99 });
+  assert.equal(early.result.grade, 'miss');
+  assert.equal(early.result.faults, 5);
+  assert.equal(early.result.label, 'Мимо зоны!');
+  assert.ok(!early.result.overdrive);
+
+  // Передержать всё ещё можно: прогресс дошёл до 1 без отпускания
+  const q = new Qte('aframe');
+  q.update(0.01);
+  q.press('ArrowUp', q.target);
+  q.update(q.target + d.travel + 0.1);
+  assert.equal(q.result.grade, 'late');
+  assert.equal(q.result.label, 'Медленно…');
+  assert.equal(q.result.faults, 0);
 });

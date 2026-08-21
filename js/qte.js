@@ -4,8 +4,10 @@
 //  press       — одна клавиша в тайминг-окне (барьеры, стена, длинный прыжок, туннель)
 //  rhythm      — чередование ←→ по битам (легаси-слалом; в V4 заменён groove)
 //  groove      — слалом-ритм: 12 стоек = 12 битов метронома, окна в мс (не масштабируются
-//                породой), BPM растёт от perfect-серий, 3 промаха = возврат на 1-ю стойку
-//  holdRelease — удерживать ↑ на снаряде, отпустить в жёлтой контактной зоне (горка, бум)
+//                породой), BPM растёт от perfect-серий; одиночный промах = спотыкание
+//                (бег продолжается), только WEAVE_MISS_STREAK промахов ПОДРЯД = возврат
+//  holdRelease — удерживать ↑ на снаряде, отпустить в жёлтой контактной зоне (горка, бум);
+//                за жёлтой — узкая красная overdrive-зона: риск срыва ради ×1.5 очков
 //  twoStage    — ↑ на заход, затем Space в момент опускания доски (качели)
 //  hold        — удерживать Space до заполнения шкалы (легаси-стол)
 //  freeze      — стол «Замри»: заход, 5с НЕ трогать кнопки (судья считает, бывают
@@ -25,10 +27,12 @@ export const QTE_DEFS = {
   tunnel:  { kind: 'press', key: 'ArrowDown', command: 'Туннель!',    window: 0.60, lead: 1.1 },
   weave:   { kind: 'groove', keys: ['ArrowLeft', 'ArrowRight'], beats: 12,
              command: 'Змейка!', window: 0.38, lead: 1.2 },
+  // zoneRed — красная overdrive-зона на самом краю контакта (Mario Golf Super Rush):
+  // ~10× уже жёлтой, отпускание там либо ×1.5 очков, либо срыв с фолтами.
   aframe:  { kind: 'holdRelease', key: 'ArrowUp', command: 'Вперёд!', zoneCmd: 'Зона!',
-             window: 0.6, lead: 1.1, travel: 1.6, zone: [0.72, 0.97] },
+             window: 0.6, lead: 1.1, travel: 1.6, zone: [0.72, 0.97], zoneRed: [0.97, 1.0] },
   dogwalk: { kind: 'holdRelease', key: 'ArrowUp', command: 'Вперёд!', zoneCmd: 'Зона!',
-             window: 0.65, lead: 1.1, travel: 2.2, zone: [0.78, 0.98] },
+             window: 0.65, lead: 1.1, travel: 2.2, zone: [0.78, 0.98], zoneRed: [0.98, 1.0] },
   seesaw:  { kind: 'twoStage', key: 'ArrowUp', key2: 'Space', command: 'Качели!', tipCmd: 'Жди!',
              window: 0.5, lead: 1.1, tipDelay: 0.9, window2: 0.42 },
   table:   { kind: 'freeze', key: 'Space', command: 'Стол!', holdCmd: 'Замри…', goCmd: 'GO!',
@@ -50,6 +54,13 @@ export const GROOVE_WINDOWS = {
   excellent: { p: 0.060, g: 0.110, o: 0.160 },
   masters:   { p: 0.045, g: 0.085, o: 0.125 },
 };
+
+// S4: сколько промахов ПОДРЯД в слаломе означают реальную потерю стоек (возврат
+// на 1-ю). Одиночные промахи не копятся — «награда за бит, не наказание за промах»
+// (Hi-Fi Rush): собака спотыкается, ритм-серия рвётся, но бег не обрывается.
+export const WEAVE_MISS_STREAK = 4;
+// Шанс сорваться с контакта при отпускании в красной overdrive-зоне.
+export const OVERDRIVE_RISK = 0.4;
 
 // PS-style обманки: на press-снарядах показываем несколько кнопок, настоящая
 // раскрывается за reveal секунд до цели. Настоящие, но РЕДКИЕ — иначе на мобайле
@@ -83,7 +94,8 @@ const GRADE_SCORE = { perfect: 3, good: 2, late: 1, miss: 0 };
 // Общий контракт: new Qte(type, {windowScale, ...}) → update(t)/press(key,t)/release(key,t)
 // события копятся в this.events (и возвращаются из вызова), финал — this.result.
 // opts для V4: bpm/grooveWindows/accelEvery/audioOffset (groove), fakePauses (freeze),
-// serpSeq или serpRand (serp), riskScale (late-commit сжимает окно).
+// serpSeq или serpRand (serp), riskScale (late-commit сжимает окно),
+// overdriveScale/overdriveRisk/rand (красная зона holdRelease).
 export class Qte {
   constructor(type, opts = {}) {
     this.type = type;
@@ -101,6 +113,9 @@ export class Qte {
     this.stageGrade = 'good';   // защитная инициализация для twoStage
     this.holdStart = null;
     this.progress = 0;         // для шкал (стол, контактные)
+    // Инъектируемый генератор: все случайные исходы QTE должны быть воспроизводимы
+    // в тестах и автопилот-харнессах.
+    this.rand = opts.rand || Math.random;
     const d = this.def;
     if (d.kind === 'groove') {
       this.beat = 60 / (opts.bpm || 120);
@@ -110,9 +125,20 @@ export class Qte {
       this.audioOffset = opts.audioOffset || 0; // калибровка задержки звука (сек)
       this.nextBeatT = null;   // ставится при активации (= target)
       this.perfectStreak = 0;
-      this.missCount = 0;      // промахи текущего прохода; 3 = возврат на 1-ю стойку
+      this.missCount = 0;      // промахи ПОДРЯД; WEAVE_MISS_STREAK = возврат на 1-ю стойку
+      this.missTotal = 0;      // все промахи прохода (для грейда и аналитики)
+      this.missStreakMax = opts.missStreak || WEAVE_MISS_STREAK;
       this.restarts = 0;
       this._lastMissBeat = null; // для стресс-окна после промаха
+    }
+    if (d.kind === 'holdRelease' && d.zoneRed) {
+      // Красная зона растёт/сжимается от верхней границы (край контакта всегда
+      // остаётся красным), но никогда не наезжает на жёлтую и не выходит за 1.
+      const sc = opts.overdriveScale ?? 1;
+      const width = (d.zoneRed[1] - d.zoneRed[0]) * sc;
+      const lo = Math.min(Math.max(d.zoneRed[1] - width, d.zone[1]), d.zoneRed[1] - 1e-4);
+      this.zoneRed = [lo, Math.min(d.zoneRed[1], 1)];
+      this.overdriveRisk = opts.overdriveRisk ?? OVERDRIVE_RISK;
     }
     if (d.kind === 'freeze') {
       this.fakePauses = opts.fakePauses || []; // [{at, dur}] по сырому времени счёта
@@ -446,6 +472,16 @@ export class Qte {
         const p = this.progress;
         if (p < d.zone[0]) {
           this._finish('miss', 5, 'Мимо зоны!');
+        } else if (this.zoneRed && p >= this.zoneRed[0]) {
+          // Овердрайв: край контакта. Либо срыв с фолтами, либо перфект с ×1.5
+          // очков (множитель начисляет game.js по result.overdrive).
+          if (this.rand() < this.overdriveRisk) {
+            this._finish('miss', 5, 'Сорвалась с контакта!');
+          } else {
+            this._emit('overdrive');
+            this._finish('perfect', 0, 'ОВЕРДРАЙВ!');
+            if (this.result) this.result.overdrive = true;
+          }
         } else {
           const zc = (d.zone[0] + d.zone[1]) / 2, zr = (d.zone[1] - d.zone[0]) / 2;
           const g = Math.abs(p - zc) < zr * 0.45 ? 'perfect' : 'good';
@@ -497,7 +533,7 @@ export class Qte {
     return 1;
   }
 
-  // Обработка одного бита groove: грейд, серии, разгон BPM, возврат при 3 промахах.
+  // Обработка одного бита groove: грейд, серии, разгон BPM, возврат при серии промахов.
   // delta — знаковое смещение хита от бита (для автокалибровки); null для таймаута.
   _grooveBeat(g, t, delta = null) {
     this.beatGrades.push(g);
@@ -519,10 +555,15 @@ export class Qte {
     if (g === 'miss') {
       this._lastMissBeat = this.beatIdx; // beatIdx уже инкрементнут — след. бит получит leeway
       this.missCount++;
-      if (this.missCount >= 3) {
-        // Возврат на 1-ю стойку: время идёт, фолтов нет — наказание темпом.
-        // Темп тоже сбрасывается — «с первой стойки» значит с исходного ритма,
-        // иначе разгон копится через рестарты без предела.
+      this.missTotal++;
+      // Спотыкание: бит засчитан пройденным, бег продолжается. Визуал пыли и
+      // сброс комбо навешивает game.js — здесь только сигнал.
+      this._emit('stumble', { i: this.beatIdx - 1 });
+      if (this.missCount >= this.missStreakMax) {
+        // Серия промахов — собака реально потеряла стойки. Возврат на 1-ю:
+        // время идёт, фолтов нет — наказание темпом. Темп тоже сбрасывается —
+        // «с первой стойки» значит с исходного ритма, иначе разгон копится
+        // через рестарты без предела.
         this.beat = this.baseBeat;
         this.beatIdx = 0;
         this.beatGrades = [];
@@ -534,6 +575,8 @@ export class Qte {
         this._emit('restart', { n: this.restarts });
         return;
       }
+    } else {
+      this.missCount = 0;  // серия рвётся любым попаданием — промахи не копятся
     }
     this.nextBeatT += this.beat;
   }
@@ -543,12 +586,12 @@ export class Qte {
     const golden = this.restarts === 0 && misses === 0 &&
       this.beatGrades.every(g => g === 'perfect');
     if (golden) this._emit('golden');
-    let grade;
-    if (misses > 0) grade = 'late';
-    else {
-      const avg = this.beatGrades.reduce((s, g) => s + GRADE_SCORE[g], 0) / this.beatGrades.length;
-      grade = avg >= 2.6 ? 'perfect' : avg >= 1.8 ? 'good' : 'late';
-    }
+    // Грейд по средней точности, а не по факту промаха: спотыкание уже наказано
+    // нулём в среднем и разрывом ритм-серии, обнулять весь слалом незачем.
+    // Потолок при промахах — 'late' (перфект/гуд слалом обязан быть без спотыканий).
+    const avg = this.beatGrades.reduce((s, g) => s + GRADE_SCORE[g], 0) / this.beatGrades.length;
+    let grade = avg >= 2.6 ? 'perfect' : avg >= 1.8 ? 'good' : 'late';
+    if (misses > 0 && GRADE_SCORE[grade] > GRADE_SCORE.late) grade = 'late';
     this._finish(grade, 0, golden ? 'GOLDEN WEAVE!' : null);
     if (golden && this.result) this.result.golden = true;
   }
