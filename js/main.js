@@ -64,12 +64,17 @@ const app = {
   stage: Number(localStorage.getItem('agility_stage') || 1), // 1..STAGES
   run: null,
   result: null,
-  mode: 'career',          // career | worldcup (реальные трассы) | daily (трасса дня)
+  mode: 'career',          // career | worldcup (реальные трассы) | daily (трасса дня) | zen (прогулка)
   realIdx: 0,
   t: 0,
   bestPoints: Number(localStorage.getItem('agility_best') || 0),
   testDrive: TEST_DRIVE,
 };
+
+// Порядок режимов в переключателе меню: стрелки, точки-индикаторы и ↑↓ читают
+// один и тот же массив, иначе они разъезжаются. Zen — последним: это выход
+// «отдохнуть», а не соревновательный режим.
+const MODE_ORDER = ['career', 'worldcup', 'daily', 'zen'];
 
 function careerSeed(cls, stage) {
   return (CLASS_ORDER.indexOf(cls) + 1) * 1000 + stage * 37 + 11;
@@ -210,7 +215,10 @@ const menuIdle = new IdleMachine();
 const CHLOE_URL = 'https://vk.com/chloe.myaussie'; // дневник аусси Хлои — прототипа персонажа
 // Настройки (доступность и громкости)
 const settings = (() => {
-  const defs = { shake: true, colorblind: false, music: 0.6, sfx: 0.6, haptics: true };
+  // assist — S4.8 «Хендлер помогает»: окна реакции +50% и метроном весь забег.
+  // Это доступность, а не читерство: цена честная и явная (🦴 ×0.5, без Golden
+  // Weave и без онлайн-топа), поэтому флаг живёт в общих настройках.
+  const defs = { shake: true, colorblind: false, music: 0.6, sfx: 0.6, haptics: true, assist: false };
   try { return { ...defs, ...JSON.parse(localStorage.getItem('agility_settings') || '{}') }; }
   catch { return { ...defs }; }
 })();
@@ -613,8 +621,10 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (app.state === 'menu') menuClick(p.x, p.y);
   else if (app.state === 'results') {
-    // Секвенция ещё идёт — первый тап всегда скип
-    if (app.run && app.run.finishT < 3.4) { app.run.finishT = 3.4; audio.click(); return; }
+    // Секвенция ещё идёт — первый тап всегда скип (в спокойном итоге Zen/практики
+    // секвенции нет, и «съедать» первый тап нельзя — кнопки должны работать сразу)
+    const calmRes = !!(app.run && (app.run.zen || app.run.practice));
+    if (!calmRes && app.run && app.run.finishT < 3.4) { app.run.finishT = 3.4; audio.click(); return; }
     if (inZone(app.chloeZoneResults)) return openChloe();
     if (IS_TOUCH) {
       // Геометрия панели берётся из общего resultsPanel(): раньше здесь жила
@@ -628,6 +638,7 @@ canvas.addEventListener('pointerdown', (e) => {
           if (b.id === 'retry') return resultsKey('KeyR');
           if (b.id === 'treat') return openTreat();
           if (b.id === 'share') return shareResult();
+          if (b.id === 'practice') return resultsKey('KeyP');
           if (b.id === 'menu') return resultsKey('Escape');
         }
       }
@@ -686,7 +697,7 @@ function menuKey(code) {
   if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); menuIdle.set('shake'); }
   if (code === 'ArrowRight') { app.breedIdx = (app.breedIdx + 1) % breedList.length; audio.click(); menuIdle.set('shake'); }
   if (code === 'ArrowUp' || code === 'ArrowDown') {
-    const modes = ['career', 'worldcup', 'daily'];
+    const modes = MODE_ORDER;
     const dir = code === 'ArrowUp' ? -1 : 1;
     app.mode = modes[(modes.indexOf(app.mode) + dir + modes.length) % modes.length];
     audio.click();
@@ -728,11 +739,23 @@ function menuClick(x, y) {
 }
 
 function resultsKey(code) {
+  const calm = !!(app.run && (app.run.zen || app.run.practice));
+  // Практика: «ещё раз» = ещё загон по тому же снаряду, а не боевой прогон
+  if (code === 'KeyR' && app.run?.practice) {
+    return startPractice(app.run.practice.type, app.run.course.cls);
+  }
   // Мгновенный рестарт (S1.1): R перезапускает сразу, даже во время секвенции —
   // не нужно сперва скипать протокол. Спидран-цикл без трения.
   if (code === 'KeyR') return startRun();
-  // Первый инпут во время секвенции = скип к финальному состоянию протокола
-  if (app.run && app.run.finishT < 3.4 && code !== 'Escape') {
+  // P — уйти в загон по проблемному снаряду (S4.9), если есть что тренировать
+  if (code === 'KeyP') {
+    const offer = practiceOffer();
+    if (offer) return startPractice(offer.type, offer.cls);
+    return;
+  }
+  // Первый инпут во время секвенции = скип к финальному состоянию протокола.
+  // Спокойный итог (Zen/практика) секвенции не печатает — скипать нечего.
+  if (!calm && app.run && app.run.finishT < 3.4 && code !== 'Escape') {
     app.run.finishT = 3.4;
     audio.click();
     return;
@@ -740,6 +763,9 @@ function resultsKey(code) {
   if (code === 'KeyS') return shareResult();
   if (code === 'KeyT') return openTreat();
   if (code === 'Enter' || code === 'Space') {
+    // Zen и практика прогрессию не двигают: ни этапов карьеры, ни подиума —
+    // просто следующий заход (прогулка / обычный старт после тренировки).
+    if (calm) return startRun();
     // Подиум-церемония (S3.5): боссовые и турнирные заезды награждают перед выходом
     if (podiumPlace() && !app.podiumDone) { openPodium(); return; }
     // Тест-драйв: без прогрессии — просто ещё заход
@@ -835,6 +861,15 @@ function startRun() {
   let course;
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
+  } else if (app.mode === 'zen') {
+    // S4.12 «Прогулка в парке»: класс Open — щадящий и при этом живой. Novice дал
+    // бы только барьеры и туннели (гулять скучно), Excellent+ тащит обманки,
+    // фейк-паузы судьи и double-tap шину — механики про давление, которому
+    // в Zen места нет. Open добавляет слалом и контактный снаряд: ритм есть,
+    // подвоха нет. Сид крутится от прогона к прогону — парк каждый раз новый.
+    app.zenIdx = (app.zenIdx || 0) + 1;
+    course = generateCourse(931 + app.zenIdx * 17, 'open');
+    course.name = '🌇 Прогулка в парке';
   } else if (app.mode === 'daily') {
     // Календарь-архив (S4.11) подкладывает параметры выбранного дня; без него — сегодня.
     const ad = app.archiveDay;
@@ -871,7 +906,9 @@ function startRun() {
     course.name = `${CLASSES[app.cls].name} · трасса ${app.stage}/${STAGES}`;
   }
   const mod = MODIFIERS[activeModifier()];
-  renderer.theme = pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
+  // Zen всегда идёт на закате: тёплый свет — половина настроения режима.
+  renderer.theme = app.mode === 'zen' ? THEMES.sunset
+    : pickTheme({ mode: app.mode, stage: app.stage, modifier: activeModifier() });
   const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
   if (dressed.ringTheme) renderer.theme = dressed.ringTheme;
   // NG+ после гранд-финала: окна реакции ×0.85 — второй круг для ветеранов
@@ -881,7 +918,10 @@ function startRun() {
     audioOffset: settings.audioOffset || 0,
     // S3: комментатору нужны кличка и личный рекорд трассы («темп рекорда ринга»)
     dogName: dogName(meta, breed),
-    bestTime: (meta.counters.courseBest || {})[courseKey()] || null });
+    bestTime: (meta.counters.courseBest || {})[courseKey()] || null,
+    // S4: ассист — из настроек (действует в любом режиме), Zen — из режима меню
+    assist: !!settings.assist,
+    zen: app.mode === 'zen' });
   // Перебег прошедшего дня — вне зачёта: очки/медаль/онлайн-топ не начисляются.
   // Флаг живёт на run, поэтому переживает переход run → results.
   app.run.unscored = !!(app.archiveDay && app.archiveDay.scored === false);
@@ -908,6 +948,8 @@ function startRun() {
     app.run.bossCls = bcls;
     app.run.startLine = pickLine('bossStart');
     toasts.push({ icon: '👻', name: boss.name, desc: boss.taunt, t: 0 });
+  } else if (app.mode === 'zen') {
+    app.run.startLine = 'Просто гуляем. Секундомер сегодня выходной — иди в своё удовольствие.';
   } else {
     app.run.startLine = startLineFor(app.mode, app.cls);
   }
@@ -953,6 +995,70 @@ function startWarmup() {
   app.state = 'run';
   app.result = null;
   audio.crowdLevel(0.1);
+}
+
+// ---------- ПРАКТИКА-ЗАГОН (S4.9) ----------
+// «Проблемный снаряд» = тот, на котором игрок реально сыпался в этом прогоне.
+// Считаем по фактическим оценкам QTE (те же данные, что уходят в run_end.obstacles):
+// берём тип с наибольшим числом промахов, при равенстве — где выше доля промахов,
+// затем — который встретился раньше (обычно там и развалился прогон).
+function problemObstacle(run) {
+  if (!run || run.warmup || run.practice || run.zen || app.testDrive) return null;
+  const stat = {};
+  run.marks.forEach((m, i) => {
+    const g = m.qte?.result?.grade;
+    if (!g) return;
+    const a = stat[m.o.type] || (stat[m.o.type] = { type: m.o.type, seen: 0, miss: 0, first: i });
+    a.seen++;
+    if (g === 'miss') a.miss++;
+  });
+  const bad = Object.values(stat).filter(a => a.miss > 0);
+  if (!bad.length) return null;
+  bad.sort((a, b) => b.miss - a.miss
+    || (b.miss / b.seen) - (a.miss / a.seen)
+    || a.first - b.first);
+  return bad[0].type;
+}
+
+// Кнопка практики предлагается, только если есть что тренировать
+function practiceOffer() {
+  if (app.state !== 'results') return null;
+  const t = problemObstacle(app.run);
+  return t ? { type: t, cls: app.run.course.cls || app.cls } : null;
+}
+
+// Загон: 5 повторов одного снаряда, первые 3 попытки в 0.7× темпе, ничего
+// не начисляется (run.unscored). Класс берём тот же, что был в провальном
+// прогоне: механика снаряда зависит от класса (шина с апексом, фейк-паузы стола),
+// и тренировать надо ровно ту версию, на которой игрок посыпался.
+function startPractice(type, cls) {
+  const kls = CLASSES[cls] ? cls : 'open';
+  const course = generateCourse(1700 + (app._practiceN = (app._practiceN || 0) + 1) * 29, kls,
+    { forceTypes: [type, type, type, type, type] });
+  course.name = `🎯 Загон · ${OBSTACLE_NAMES[type] || type}`;
+  const breed = breedList[app.breedIdx];
+  renderer.theme = THEMES.day;
+  const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
+  app.run = new Run({ course, breed: dressed, audio, particles: fx, renderer,
+    assist: !!settings.assist,
+    dogName: dogName(meta, breed),
+    practice: { type, slowTries: 3 } });
+  app.run.startLine = `Разберём ${OBSTACLE_NAMES[type] || type}. Первые заходы — медленно, торопиться некуда.`;
+  renderer.cam.x = course.start.x;
+  renderer.cam.y = course.start.y;
+  app.state = 'run';
+  app.result = null;
+  app.bossWin = null;
+  app.photo = null;
+  app.photoDone = false;
+  app.podiumDone = false;
+  app.podium = null;
+  app.treatDone = false;
+  app.photoMode = null;
+  renderer.crowdStanding = false;
+  audio.crowdLevel(0.05);
+  app._runId = String(Date.now()) + '-' + (app._runN = (app._runN || 0) + 1);
+  track('practice_start', { run_id: app._runId, obstacle: type, cls: kls, mode: app.mode });
 }
 
 // ---------- HUD ----------
@@ -1069,18 +1175,47 @@ function drawHud(run) {
     return;
   }
 
-  // Верхняя панель: снаряды, время, фолты, комбо
+  // Верхняя панель: снаряды, время (или — в Zen/практике — то, что уместно)
   ctx.save();
   ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
-  panel(ctx, 14, 14, 300 * z, 88 * z);
+  // Zen: таймера нет (run.timed === false) — панель ужимается до одной строки
+  panel(ctx, 14, 14, 300 * z, (run.timed ? 88 : 56) * z);
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const done = run.marks.filter(m => m.resolved).length;
   ctx.fillText(`Снаряд ${Math.min(done + 1, run.marks.length)}/${run.marks.length}`, 30, 26 * z);
-  const overSct = run.time > run.sct;
-  ctx.fillStyle = overSct ? '#ff6b6b' : '#c8f7d0';
-  ctx.fillText(`${run.time.toFixed(1)}с / SCT ${run.sct}с`, 30, 56 * z);
+  if (run.practice) {
+    // Практика-загон: вместо секундомера — попытка и текущий темп. Игрок должен
+    // видеть, что первые заходы медленнее, и поймать момент выхода на полный темп.
+    const p = run.practice;
+    const full = p.tries >= p.slowTries;
+    ctx.font = `bold ${Math.round(19 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = full ? '#ffd54a' : '#8fd8ff';
+    ctx.fillText(`Попытка ${p.tries + 1} · темп ${Math.round(p.speedMul * 100)}%` +
+      (full ? ' — полный!' : ` → 100% через ${p.slowTries - p.tries}`), 30, 56 * z);
+  } else if (run.timed) {
+    const overSct = run.time > run.sct;
+    ctx.fillStyle = overSct ? '#ff6b6b' : '#c8f7d0';
+    ctx.fillText(`${run.time.toFixed(1)}с / SCT ${run.sct}с`, 30, 56 * z);
+  }
   ctx.restore();
+
+  // Zen и практика: правой панели с фолтами/риском/звёздами нет вовсе — судить
+  // некому, оценка была бы враньём. Комбо оставляем строкой без панели:
+  // оно ведёт темп и слои музыки, это информация, а не приговор.
+  if (!run.timed || run.practice) {
+    ctx.save();
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    const cb = Math.floor(run.score.combo);
+    const tag = run.practice ? '🎯 Загон' : '🌇 Прогулка';
+    ctx.fillStyle = cb >= 3 ? 'rgba(255,213,74,0.9)' : 'rgba(255,255,255,0.6)';
+    ctx.fillText(cb > 0 ? `${tag} · ритм ×${cb}` : tag, w - 30, 26 * z);
+    ctx.restore();
+    hudShiftY = 0;
+    drawHudTail(run, z);
+    return;
+  }
 
   ctx.save();
   // Панель растёт на одну строку только если есть И риск, И звёзды — иначе
@@ -1122,6 +1257,14 @@ function drawHud(run) {
   // на добавленную строку, иначе имя класса наедет на звёзды.
   hudShiftY = (riskOn && starsOn && isPortrait()) ? 30 * z : 0;
 
+  drawHudTail(run, z);
+}
+
+// Общая часть HUD ниже панелей: имя трассы, комментатор, ритуал старта,
+// подсказки, QTE, реплики, тач-кнопки. Одна для боевого забега и для Zen —
+// в Zen меняется только «шапка» с панелями, а мир и подсказки те же.
+function drawHudTail(run, z) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   // Класс и порода (в портрете — под панелями, чтобы не наезжать)
   ctx.save();
   ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
@@ -1130,15 +1273,24 @@ function drawHud(run) {
   const cname = run.course.name || run.course.class.name;
   const modName = MODIFIERS[run.modifier]?.name;
   ctx.fillText(`${cname} · ${breedList[app.breedIdx].name}`, w / 2, (isPortrait() ? 118 : 22) * z + hudShiftY);
-  if (modName) {
-    ctx.fillStyle = '#ffab6b';
-    ctx.fillText(modName, w / 2, (isPortrait() ? 140 : 44) * z + hudShiftY);
+  // Вторая строка шапки: модификатор дня и/или напоминание про ассист.
+  // Игрок не должен «забыть», что окна расширены и косточки урезаны, —
+  // поэтому метка висит весь забег, а не всплывает разово.
+  const subParts = [];
+  if (modName) subParts.push(modName);
+  if (run.assist) subParts.push('🤝 Ассист: окна +50% · 🦴 ×0.5');
+  if (subParts.length) {
+    ctx.fillStyle = modName ? '#ffab6b' : '#9ff0b4';
+    ctx.fillText(subParts.join('  ·  '), w / 2, (isPortrait() ? 140 : 44) * z + hudShiftY);
   }
   ctx.restore();
 
   // Перебег из архива (S4.11): честная плашка — результат никуда не идёт.
   // Ниже строки комментатора (72z/168z), иначе они дерутся за одно место.
-  if (run.unscored) drawUnscoredBadge(ctx, w / 2, (isPortrait() ? 198 : 102) * z + hudShiftY, z);
+  if (run.unscored) {
+    drawUnscoredBadge(ctx, w / 2, (isPortrait() ? 198 : 102) * z + hudShiftY, z,
+      run.practice ? '🎯 Тренировка — очки и награды не начисляются' : null);
+  }
 
   // Радио-строка комментатора (S3): трансляция ринга по триггерам забега
   drawCommentary(run, z);
@@ -1655,13 +1807,16 @@ function settingsRows(px, py, pw, z) {
     { id: 'shake', name: 'Тряска экрана', kind: 'toggle', y: py + 82 * z },
     { id: 'colorblind', name: 'Колорблайнд: форма дублирует цвет', kind: 'toggle', y: py + 126 * z },
     { id: 'haptics', name: 'Вибрация (тач)', kind: 'toggle', y: py + 170 * z },
-    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 224 * z },
-    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 274 * z },
-    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 328 * z },
-    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 372 * z },
+    // Название прямо называет и помощь, и её цену — чтобы игрок не чувствовал
+    // себя обманутым ни включая ассист, ни увидев урезанную награду.
+    { id: 'assist', name: '🤝 Хендлер помогает · окна +50%, 🦴 ×0.5', kind: 'toggle', y: py + 214 * z },
+    { id: 'music', name: 'Музыка', kind: 'slider', y: py + 268 * z },
+    { id: 'sfx', name: 'Звуки', kind: 'slider', y: py + 318 * z },
+    { id: 'calib', name: `🎧 Калибровка звука (${offMs >= 0 ? '+' : ''}${offMs} мс)`, kind: 'button', y: py + 372 * z },
+    { id: 'trainer', name: '🎵 Тренировка змейки', kind: 'button', y: py + 416 * z },
   ];
   if (meta.ngplusUnlocked) {
-    rows.push({ id: 'ngplus', name: '👑 NG+ · окна реакции ×0.85', kind: 'toggle', y: py + 416 * z });
+    rows.push({ id: 'ngplus', name: '👑 NG+ · окна реакции ×0.85', kind: 'toggle', y: py + 460 * z });
   }
   return rows;
 }
@@ -1673,7 +1828,9 @@ function drawSettings() {
   ctx.fillStyle = 'rgba(6,12,10,0.85)';
   ctx.fillRect(0, 0, w, h);
   const pw = Math.min(520 * z, w * 0.94);
-  const ph = Math.min((meta.ngplusUnlocked ? 510 : 470) * z, h * 0.92);
+  // +44z к высоте панели — под строку ассиста (S4.8), иначе последняя строка
+  // и подпись «O / ESC — назад» дерутся за одно место.
+  const ph = Math.min((meta.ngplusUnlocked ? 554 : 514) * z, h * 0.92);
   const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
   panel(ctx, px, py, pw, ph);
   ctx.textAlign = 'center';
@@ -1974,7 +2131,8 @@ const PODIUM_ROSETTE = 'neck-rosette-champion';
 
 function podiumPlace() {
   const run = app.run, res = app.result;
-  if (!run || !res || run.warmup || app.testDrive) return 0;
+  // Zen и практика — вне соревнования: церемонии награждения там не бывает
+  if (!run || !res || run.warmup || run.zen || run.practice || app.testDrive) return 0;
   const isDuel = !!run.bossCls, isCup = app.mode === 'worldcup';
   if (!isDuel && !isCup) return 0;
   if (run.eliminated) return 3;
@@ -2560,8 +2718,8 @@ function startArchiveRun(day) {
   startRun();                 // тот же путь, что и обычная трасса дня
 }
 
-function drawUnscoredBadge(ctx, cx, cy, z) {
-  const txt = '⚠ Вне зачёта — перебег прошедшего дня';
+function drawUnscoredBadge(ctx, cx, cy, z, text) {
+  const txt = text || '⚠ Вне зачёта — перебег прошедшего дня';
   ctx.save();
   ctx.textAlign = 'center';
   ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
@@ -3354,6 +3512,22 @@ function drawQte(run, m, z) {
       ctx.strokeStyle = `rgba(255,90,90,${0.4 + 0.6 * pl})`; ctx.lineWidth = 1.5;
       ctx.strokeRect(rx0 - 3 * z, top - 4 * z, rw + 6 * z, hgt + 8 * z);
       ctx.restore();
+      // Зона всего 3% шкалы (~10px) — курсор её почти целиком перекрывает.
+      // Ширину не раздуваем (игрок целится по нарисованному), поэтому выносим
+      // указатель ВНИЗ: под шкалой пусто до тач-кнопок, а зона остаётся видна.
+      const rcx = rx0 + rw / 2, ty = cy + 20 * z;
+      ctx.save();
+      ctx.fillStyle = `rgba(255,90,90,${0.55 + 0.45 * pl})`;
+      ctx.beginPath();
+      ctx.moveTo(rcx, ty); ctx.lineTo(rcx - 5 * z, ty + 7 * z); ctx.lineTo(rcx + 5 * z, ty + 7 * z);
+      ctx.closePath(); ctx.fill();
+      ctx.font = `900 ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.strokeText('×1.5', rcx, ty + 21 * z);
+      ctx.fillStyle = '#ff8a8a';
+      ctx.fillText('×1.5', rcx, ty + 21 * z);
+      ctx.restore();
     }
     const px = cx - bw / 2 + bw * q.progress;
     ctx.fillStyle = '#fff';
@@ -3590,6 +3764,9 @@ function drawMenu(dt) {
   } else if (app.mode === 'worldcup') {
     modeName = isPortrait() ? `ЧЕМПИОНАТ МИРА (${REAL_COURSES.length})`
       : `ЧЕМПИОНАТ МИРА · реальные трассы (${REAL_COURSES.length})`;
+  } else if (app.mode === 'zen') {
+    modeName = isPortrait() ? '🌇 ПРОГУЛКА В ПАРКЕ'
+      : '🌇 ПРОГУЛКА В ПАРКЕ · без таймера, штрафов и судьи';
   } else {
     const db = dailyBest();
     modeName = isPortrait()
@@ -3620,12 +3797,12 @@ function drawMenu(dt) {
     left: { x: axL, y: modeY - modeFs * 0.32, r: ar * 1.5 },
     right: { x: axR, y: modeY - modeFs * 0.32, r: ar * 1.5 },
   };
-  // Точки-индикаторы трёх режимов
-  const modesOrder = ['career', 'worldcup', 'daily'];
+  // Точки-индикаторы режимов (центрируются по количеству — их уже четыре с Zen)
+  const modesOrder = MODE_ORDER;
   modesOrder.forEach((mo, i) => {
     ctx.beginPath();
     ctx.fillStyle = mo === app.mode ? '#ffd54a' : 'rgba(255,255,255,0.35)';
-    ctx.arc(w / 2 + (i - 1) * 16 * z, modeY + 11 * z, 3.4 * z, 0, Math.PI * 2);
+    ctx.arc(w / 2 + (i - (modesOrder.length - 1) / 2) * 16 * z, modeY + 11 * z, 3.4 * z, 0, Math.PI * 2);
     ctx.fill();
   });
 
@@ -3635,6 +3812,12 @@ function drawMenu(dt) {
   if (app.mode === 'career') {
     const extra = drawCareerMap(ctx, w / 2, subY, z, isPortrait());
     headerBottom = subY + ((isPortrait() ? 1 : 2) + (extra || 0)) * 19 * z;
+  } else if (app.mode === 'zen') {
+    // Честная подпись: в Zen ничего не начисляется — это отдых, а не ферма
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#ffcf9e';
+    ctx.fillText('Закат, свой темп · промахи без штрафа · без наград и рекордов', w / 2, subY);
+    headerBottom = subY + 6 * z;
   } else if (app.mode === 'daily') {
     const mod = MODIFIERS[dailyModifier()];
     if (mod.name) {
@@ -4001,12 +4184,19 @@ function resultsPanel() {
   const w = canvas.width, h = canvas.height;
   const z = Math.min(w, h) / 700;
   const pw = Math.min(520 * z, w * 0.9);
-  const ph = Math.min((IS_TOUCH ? 732 : 664) * z, h * 0.96);
+  // Спокойный итог (Zen/практика) короче протокола судьи: там нет звёзд, медали,
+  // наград и целей. Высоту меняем именно здесь — эту же геометрию читает
+  // хит-тест тач-кнопок, иначе кнопки и их зоны разъедутся.
+  const calm = !!(app.run && (app.run.zen || app.run.practice));
+  const ph = Math.min((calm ? (IS_TOUCH ? 560 : 500) : (IS_TOUCH ? 732 : 664)) * z, h * 0.96);
   return { w, h, z, pw, ph, px: w / 2 - pw / 2, py: h / 2 - ph / 2 };
 }
 
 function drawResults(run, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  // Zen и практика судьёй не судятся: у них свой спокойный итог без вердикта,
+  // звёзд, медалей и начислений (см. drawCalmResults).
+  if (run.zen || run.practice) return drawCalmResults(run, z);
   if (!app.result) {
     // Тихая автокалибровка: усваиваем дельты хитов слалома этого прогона
     if (run._calibSamples && run._calibSamples.length) {
@@ -4035,6 +4225,11 @@ function drawResults(run, z) {
     // Перебег прошедшего дня из архива (S4.11) — вне зачёта: ни медали, ни рекорда
     // дня, ни онлайн-сабмита. Локальная статистика и XP при этом живут как обычно.
     const scored = !run.unscored;
+    // Ассист расширяет окна в полтора раза — время такого прогона несопоставимо
+    // с чужими в общем топе, поэтому онлайн-сабмит выключен. Локальный прогресс
+    // (медали, карьера, рекорд) остаётся: игра должна проходиться и с ассистом,
+    // иначе доступность превращается в тупик.
+    const scoredOnline = scored && !run.assist;
     app.newMedal = scored ? recordMedal(app.result.stars) : false;
     app.newDailyBest = false;
     if (scored && app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
@@ -4089,8 +4284,9 @@ function drawResults(run, z) {
         perfects: run.score.perfects, max_combo: run.score.maxCombo,
         risks: run.focus?.used || 0, golden: !!run.goldenWeave,
         obstacles: obStats, obstacle_count: run.marks.length,
+        assist: !!run.assist,
         mode: app.mode, cls: app.cls, breed: run.breed.name });
-      if (scored && app.result.points > 0) submitOnline(app.result.points, run.time);
+      if (scoredOnline && app.result.points > 0) submitOnline(app.result.points, run.time);
     }
 
     // ---- V2 Мета: перфект-челлендж (4-я звезда), валюты, XP, задания ----
@@ -4133,6 +4329,15 @@ function drawResults(run, z) {
         meta.counters.goldByBreed[breedList[app.breedIdx].id] =
           (meta.counters.goldByBreed[breedList[app.breedIdx].id] || 0) + 1;
       }
+      // Честная цена ассиста: косточки за прогон вдвое. Урезаем ДО дара пуделя,
+      // чтобы множители не спорили за порядок, и обязательно показываем игроку
+      // строкой в награде — скрытый штраф был бы обманом, а не честностью.
+      if (run.assist && earned.bones > 0) {
+        const cut = earned.bones - Math.floor(earned.bones * 0.5);
+        meta.bones -= cut;
+        earned.bones -= cut;
+        earned.detail.push(['ассист ×0.5', -cut]);
+      }
       // Пудель: дар «шоу» — ×1.25 косточек за прогон (×1.5 стакался со
       // streak-множителем до ×2.25 и делал пуделя безальтернативным фармером)
       if (run.breed.ability === 'show' && earned.bones > 0) {
@@ -4170,7 +4375,7 @@ function drawResults(run, z) {
       const claimed = claimDone(meta);
       for (const dq of doneNow) { track('quest_complete', { id: dq.id, bones: dq.bones || 0 }); toasts.push({ icon: '📋', name: 'Задание выполнено', desc: dq.name, t: 0 }); }
       app.lastEarn = { bones: earned.bones + (claimed.bones || 0), detail: earned.detail,
-        rosettes: ros + (claimed.rosettes || 0), xp: xp.gained, breedId };
+        rosettes: ros + (claimed.rosettes || 0), xp: xp.gained, breedId, assist: !!run.assist };
       saveMeta(meta);
     }
   }
@@ -4200,6 +4405,25 @@ function drawResults(run, z) {
   ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 16 * z); ctx.fill(); ctx.stroke();
   ctx.restore();
   ctx.textAlign = 'center';
+
+  // Метка ассиста — в свободном левом верхнем углу протокола, над вердиктом.
+  // Прямо называет цену: половина косточек и никакого онлайн-топа.
+  if (run.assist && ft > 0.2) {
+    const txt = '🤝 Ассист · 🦴 ×0.5 · без онлайн-топа';
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = ease(0.2, 0.3);
+    ctx.font = `bold ${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+    const tw = ctx.measureText(txt).width;
+    ctx.fillStyle = 'rgba(20,50,36,0.85)';
+    ctx.strokeStyle = 'rgba(159,240,180,0.7)'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.roundRect(px + 12 * z, py + 10 * z, tw + 20 * z, 20 * z, 10 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#9ff0b4';
+    ctx.fillText(txt, px + 22 * z, py + 20 * z);
+    ctx.restore();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  }
 
   // 1.4с: вердикт-титул с лёгким наклоном и появлением
   if (ft >= 1.4) {
@@ -4325,7 +4549,7 @@ function drawResults(run, z) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#ffe9a8';
-    ctx.fillText(`+${e.bones} 🦴${e.rosettes ? ` +${e.rosettes} 🏵️` : ''}  ·  +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
+    ctx.fillText(`+${e.bones} 🦴${e.assist ? ' 🤝×0.5' : ''}${e.rosettes ? ` +${e.rosettes} 🏵️` : ''}  ·  +${e.xp} XP · ${tg ? tg + ' · ' : ''}ур. ${d.level}`,
       w / 2, byy + 16 * z);
     const bw2 = bw - 32 * z, bx2 = w / 2 - bw2 / 2, by2 = byy + 26 * z;
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
@@ -4423,7 +4647,10 @@ function drawResults(run, z) {
         ctx.fillStyle = b.id === 'next' ? '#1a1a1a' : '#fff';
         ctx.font = `bold ${Math.round((b.id === 'next' ? 19 : 14) * z)}px "Segoe UI", sans-serif`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(b.id === 'next' ? nextText : b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+        // Подписи узких кнопок ужимаем под ширину: «двойной барьер» в практике
+        // длиннее прежних лейблов и на 390px вылезал бы за рамку.
+        ctx.fillText(b.id === 'next' ? nextText : fitText(ctx, b.label, b.w - 10 * z),
+          b.x + b.w / 2, b.y + b.h / 2 + 1);
         ctx.restore();
       }
       ctx.textBaseline = 'alphabetic';
@@ -4433,24 +4660,147 @@ function drawResults(run, z) {
       ctx.fillText(`ENTER — ${nextText.toLowerCase()}`, w / 2, py + ph - 64 * z);
       ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.fillText('R — переиграть · T — угостить 🍪 · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+      const offerK = practiceOffer();
+      // Строка подсказок длиннее панели не влезала — ужимаем по ширине протокола
+      ctx.fillText(fitText(ctx, offerK
+        ? `R — переиграть · P — 🎯 загон: ${OBSTACLE_NAMES[offerK.type] || offerK.type} · T — угостить · ESC — меню`
+        : 'R — переиграть · T — угостить 🍪 · S — поделиться · ESC — меню', pw - 30 * z),
+      w / 2, py + ph - 32 * z);
     }
   }
   ctx.restore();
 }
 
-// Тач-кнопки экрана результатов: большая «Дальше» + ряд действий под ней
+// Спокойный итог: Zen «Прогулка в парке» и практика-загон. Ни вердикта, ни
+// звёзд, ни медалей, ни начислений — только тёплая сводка того, что было.
+// Мета молчит намеренно: режим без давления не должен становиться фермой.
+function drawCalmResults(run, z) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const practice = !!run.practice;
+  if (!app.result) {
+    // Заглушка результата: подиум/шеринг/клавиши ждут объект, но судить нечего
+    app.result = { stars: 0, points: 0, qualified: true, clean: run.score.faults === 0,
+      totalFaults: 0, timeFaults: 0,
+      title: practice ? 'Загон окончен' : 'Прогулка окончена' };
+    if (!app.testDrive) {
+      track('run_end', { run_id: app._runId, mode: practice ? 'practice' : 'zen',
+        unscored: true, time: +run.time.toFixed(2), obstacle_count: run.marks.length,
+        perfects: run.score.perfects, tries: run.practice ? run.practice.tries : 0,
+        obstacle: run.practice ? run.practice.type : '', assist: !!run.assist });
+    }
+  }
+  const ft = run.finishT;
+  const ease = (a, dur = 0.45) => Math.max(0, Math.min(1, (ft - a) / dur));
+  const { pw, ph, px, py } = resultsPanel();
+  const done = run.marks.filter(m => m.resolved).length;
+  const title = practice
+    ? `🎯 Загон · ${OBSTACLE_NAMES[run.practice.type] || run.practice.type}`
+    : '🌇 Прогулка окончена';
+  const lines = practice
+    ? [
+      ['🔁', 'Попыток', `${run.practice.tries}`],
+      ['⭐', 'В такт', `${run.score.perfects} из ${done}`],
+      ['🏃', 'Темп', run.practice.tries >= run.practice.slowTries
+        ? 'вышел на полный' : `${Math.round(run.practice.speedMul * 100)}% — темп ещё щадящий`],
+    ]
+    : [
+      ['🐾', 'Снарядов', `${done} из ${run.marks.length}`],
+      ['⭐', 'В такт', `${run.score.perfects}`],
+      ['🌤', 'Гуляли', `${run.time.toFixed(0)}с`],
+    ];
+  const footer = practice
+    ? 'Тренировка: ничего не начисляется.'
+    : 'Ни очков, ни медалей — просто хорошая прогулка.';
+
+  ctx.save();
+  ctx.fillStyle = `rgba(6,12,10,${0.82 * ease(0, 0.3)})`;
+  ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.globalAlpha = ease(0, 0.3);
+  ctx.fillStyle = 'rgba(16,24,32,0.98)';
+  ctx.strokeStyle = 'rgba(255,213,74,0.25)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 16 * z); ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = ease(0.15, 0.35);
+  ctx.fillStyle = practice ? '#8fd8ff' : '#ffc98a';
+  ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
+  wrapText(ctx, title, w / 2, py + 76 * z, pw - 60 * z, 36 * z);
+
+  const rw = pw - 56 * z, rx = w / 2 - rw / 2, rh = 36 * z, rgap = 10 * z;
+  lines.forEach(([icon, label, val], i) => {
+    const yy = py + 150 * z + i * (rh + rgap);
+    ctx.save();
+    ctx.globalAlpha = ease(0.3 + i * 0.2, 0.35);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.roundRect(rx, yy, rw, rh, 9 * z); ctx.fill();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(icon, rx + 12 * z, yy + rh / 2 + 1);
+    ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(label, rx + 38 * z, yy + rh / 2 + 1);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#e8f5ec';
+    ctx.font = `bold ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(fitText(ctx, val, rw * 0.6), rx + rw - 12 * z, yy + rh / 2 + 1);
+    ctx.restore();
+  });
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.globalAlpha = ease(0.9, 0.5);
+  ctx.font = `italic ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  wrapText(ctx, footer, w / 2, py + ph - 170 * z, pw - 70 * z, 22 * z);
+  ctx.globalAlpha = 1;
+
+  const nextText = practice ? 'К соревнованиям' : 'Ещё прогулка';
+  if (IS_TOUCH) {
+    for (const b of resultsButtons(px, py, pw, ph, z)) {
+      ctx.save();
+      ctx.globalAlpha = b.id === 'treat' && app.treatDone ? 0.4 : 1;
+      ctx.fillStyle = b.id === 'next' ? 'rgba(255,213,74,0.92)' : 'rgba(20,36,26,0.95)';
+      ctx.strokeStyle = b.id === 'next' ? '#ffd54a' : 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 12 * z); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = b.id === 'next' ? '#1a1a1a' : '#fff';
+      ctx.font = `bold ${Math.round((b.id === 'next' ? 19 : 14) * z)}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(b.id === 'next' ? nextText : fitText(ctx, b.label, b.w - 10 * z),
+        b.x + b.w / 2, b.y + b.h / 2 + 1);
+      ctx.restore();
+    }
+    ctx.textBaseline = 'alphabetic';
+  } else {
+    ctx.font = `bold ${Math.round(20 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+    ctx.fillText(`ENTER — ${nextText.toLowerCase()}`, w / 2, py + ph - 64 * z);
+    ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(practice ? 'R — ещё загон · T — угостить 🍪 · ESC — меню'
+      : 'R — ещё прогулка · T — угостить 🍪 · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+  }
+  ctx.restore();
+}
+
+// Тач-кнопки экрана результатов: большая «Дальше» + ряд действий под ней.
+// Действий ВСЕГДА четыре: пятая кнопка не влезает в ряд на 390px, поэтому
+// «Практика» (S4.9) не добавляется, а ЗАМЕЩАЕТ «Поделиться» — после провала
+// хвастаться нечем, а тренировка ровно там и нужна.
 function resultsButtons(px, py, pw, ph, z) {
   const bw = pw - 48 * z, bh = 52 * z;
   const rowY = py + ph - 62 * z;
-  // Четыре действия: рестарт, необязательное угощение (S3.6), шеринг, меню
   const smallW = (bw - 18 * z) / 4;
   const at = (i) => px + 24 * z + (smallW + 6 * z) * i;
+  const offer = practiceOffer();
+  const third = offer
+    ? { id: 'practice', label: `🎯 ${OBSTACLE_NAMES[offer.type] || offer.type}` }
+    : { id: 'share', label: '📤 Поделиться' };
   return [
     { id: 'next', x: px + 24 * z, y: rowY - bh - 12 * z, w: bw, h: bh },
     { id: 'retry', label: '↺ Ещё раз', x: at(0), y: rowY, w: smallW, h: 44 * z },
     { id: 'treat', label: '🍪 Угостить', x: at(1), y: rowY, w: smallW, h: 44 * z },
-    { id: 'share', label: '📤 Поделиться', x: at(2), y: rowY, w: smallW, h: 44 * z },
+    { ...third, x: at(2), y: rowY, w: smallW, h: 44 * z },
     { id: 'menu', label: '⌂ Меню', x: at(3), y: rowY, w: smallW, h: 44 * z },
   ];
 }
@@ -4559,6 +4909,18 @@ function frame(now) {
       if (e.type === 'goldenWeave') { app.run.goldenWeave = true; track('golden_weave', { cls: app.cls }); }
       else if (e.type === 'risk') track('risk_arm', { cls: app.cls });
       else if (e.type === 'weaveRestart') track('weave_restart', { cls: app.cls });
+      // Ассист съел Golden Weave — говорим об этом прямо, один раз за забег:
+      // игрок должен понимать, что бонус недоступен, а не думать, что не попал.
+      else if (e.type === 'goldenSuppressed' && !app.run._goldenNotice) {
+        app.run._goldenNotice = 1;
+        toasts.push({ icon: '🤝', name: 'Golden Weave выключен', desc: 'Так работает ассист — окна шире, бонуса нет', t: 0 });
+        track('golden_suppressed', { reason: e.reason || 'assist' });
+      }
+      // Практика: выход на полный темп — главный момент загона
+      else if (e.type === 'practiceFullSpeed') {
+        toasts.push({ icon: '🔥', name: 'Полный темп!', desc: `Попыток пройдено: ${e.tries} — дальше по-боевому`, t: 0 });
+        track('practice_full_speed', { obstacle: app.run.practice?.type || '', tries: e.tries });
+      }
     }
   }
   requestAnimationFrame(frame);
@@ -4601,6 +4963,8 @@ window.__agility = {
   menuIdle,
   // S4.10/S4.11: витрина целей и календарь-архив (для e2e и ручной приёмки)
   openKennel, openArchive, startArchiveRun, kennelScrollBy,
+  // S4: практика-загон (и её выбор проблемного снаряда) — для e2e и приёмки
+  startPractice, problemObstacle, practiceOffer,
   openPodium,
   openTreat, treatAdvance, togglePhotoMode,
   pressKey(code) { app.run?.input(code, true); },
