@@ -35,8 +35,25 @@ export const HINTS = {
 
 export class Run {
   constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1,
-    audioOffset = 0, dogName = null, bestTime = null }) {
+    audioOffset = 0, dogName = null, bestTime = null,
+    assist = false, zen = false, practice = null }) {
     this.audioOffset = audioOffset; // калибровка задержки звука для groove (сек)
+    // --- S4 «Ритм-мир»: три режима-флага. Все три по умолчанию выключены,
+    // и при выключенных флагах прогон обязан вести себя ровно как раньше. ---
+    // Assist «Хендлер помогает»: окна +50%, метроном весь забег, без Golden Weave.
+    // Честная цена — UI урезает награду (косточки) по этому же флагу.
+    this.assist = !!assist;
+    // Zen «Прогулка в парке»: без фолтов, без судьи, без давления SCT.
+    this.zen = !!zen;
+    // Практика-загон: цикл одного снаряда, первые N попыток в замедленном темпе.
+    this.practice = practice
+      ? { type: practice.type || null, slowTries: practice.slowTries ?? 3,
+          slowMul: practice.slowMul ?? 0.7, tries: 0, speedMul: practice.slowMul ?? 0.7 }
+      : null;
+    // Прогон зачётный? Практика — тренировка: ни очков, ни медалей, ни рекордов.
+    this.unscored = !!this.practice;
+    // Идёт ли отсчёт SCT (для HUD: в Zen таймер не рисуем).
+    this.timed = !this.zen;
     // S3: комментатор ринга — «радио-строка» трансляции по триггерам забега
     this.dogName = dogName || breed.name;
     this.bestTime = bestTime;       // личный рекорд трассы: питает реплику «рекорд ринга»
@@ -170,7 +187,11 @@ export class Run {
     // на 10% — тёплый жест, а не боевой бафф.
     const calm = this.calmStart && !this._calmUsed;
     if (calm) this._calmUsed = true;
-    const opts = { windowScale: this.windowScale * (calm ? 1.1 : 1) };
+    // Композиция множителей окна: порода × (модификатор дня/NG+) × класс трассы
+    // — уже свёрнуты в this.windowScale, дальше разовый «спокойный старт» ×1.1
+    // и, последним, ассист ×1.5. Ассист читается динамически, а не свёрнут в
+    // windowScale, чтобы флаг работал и если его выставили уже после конструктора.
+    const opts = { windowScale: this.windowScale * (calm ? 1.1 : 1) * (this.assist ? 1.5 : 1) };
     if (type === 'tire') {
       // Double-tap шины — механика Excellent+; раньше это обычный тап
       opts.noApex = cls === 'novice' || cls === 'open';
@@ -206,7 +227,12 @@ export class Run {
   }
 
   baseSpeed() {
-    return this.course.class.dogSpeed * this.breed.speedMul;
+    // Практика-загон: замедляем ТОЛЬКО ход собаки (а значит и темп подачи —
+    // активация QTE привязана к скорости через lead × v). Ширина окон QTE в
+    // секундах не трогается: тренировка обязана учить настоящему ритму, иначе
+    // наработанный тайминг развалится на первой же боевой попытке.
+    const pm = this.practice ? this.practice.speedMul : 1;
+    return this.course.class.dogSpeed * this.breed.speedMul * pm;
   }
 
   // Множитель темпа: комбо + накопленные «чистые выходы» (S4.6, оба с потолком).
@@ -327,8 +353,33 @@ export class Run {
     return bpm > 0 ? 60 / bpm : BEAT_FALLBACK;
   }
 
+  // Assist: метроном-клик весь забег, ровно в долю музыки. Планируем заранее
+  // (lookahead ~0.12с), как это уже делает слаломный метроном — иначе клик
+  // «плывёт» на кадровой сетке. Собственный тик слалома не дублируем.
+  _assistMetro() {
+    if (!this.assist) return;
+    const mus = this.audio.music;
+    const bpm = mus?.bpm || 0;
+    if (bpm <= 0) return;
+    // В слаломе звучит его собственный метроном — молчим, чтобы не наслаивались.
+    const m = this.activeMark;
+    if (m && m.qte && m.qte.def.kind === 'groove' && m.qte.state === 'active') {
+      this._assistBeat = null;   // при выходе из слалома пересинхронизируемся
+      return;
+    }
+    const beat = 60 / bpm;
+    const phase = mus.beatPhase >= 0 ? mus.beatPhase : 0;
+    const eta = (1 - phase) * beat;          // сколько до следующей доли
+    if (eta > 0.12) return;
+    const next = mus.beatIndex + 1;          // индекс доли, которую озвучиваем
+    if (this._assistBeat === next) return;   // уже запланирована
+    this._assistBeat = next;
+    this.audio.metroTick?.(Math.max(0, eta), next % 2);
+  }
+
   _updateRunning(dt) {
     const d = this.dog;
+    this._assistMetro();
     // Окно чистого выхода живёт доли секунды — гасим, чтобы HUD не врал
     if (this.cleanExit && this.time > this.cleanExit.until) this.cleanExit = null;
 
@@ -405,6 +456,9 @@ export class Run {
       }
       const evs = m.qte.update(this.time - m.qteStart);
       this._handleQteEvents(m, evs);
+      // Мягкий повтор захода (разминка/практика) обнуляет m.qte прямо внутри
+      // обработчика — дальше по кадру опираться на него уже нельзя.
+      if (!m.qte) return;
       if (m.decoys && !m.decoys.revealed
           && this.time - m.qteStart >= m.qte.target - m.decoys.reveal) {
         m.decoys.revealed = true;
@@ -520,7 +574,10 @@ export class Run {
       haptic('finish');
       this.audio.crowdLevel(0.9);
       const clean = this.score.faults === 0;
-      this.audio.music?.setState(clean || this.score.faults <= 5 ? 'results_win' : 'results_fail');
+      // Zen: проигрыша не существует — «поражающее» состояние музыки не включаем
+      // даже теоретически (фолтов там и так нет, но контракт должен быть явным).
+      this.audio.music?.setState(this.zen || clean || this.score.faults <= 5
+        ? 'results_win' : 'results_fail');
       if (clean) { this.audio.fanfare(); this.audio.cheer(true); }
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
@@ -528,7 +585,9 @@ export class Run {
       this.say(clean ? 'finishClean' : 'finishFault', { t: this.time.toFixed(2) });
       // Победный круг (S3.3): только за чистый прогон — 3.4с вдоль трибун,
       // зрители встают, хендлер падает на колени, дальше кадр-полароид.
-      if (clean && !this.warmup) {
+      // Практика — не выступление: ни круга почёта, ни кадра-полароида.
+      // Zen круг оставляем: прогулка вдоль трибун — это не награда за результат.
+      if (clean && !this.warmup && !this.practice) {
         this.victoryLap = { t: 0, dur: 3.4, done: false, dir: 1 };
         this.r.crowdStanding = true;
       } else {
@@ -700,6 +759,11 @@ export class Run {
           this.emit({ type: 'weaveRestart' });
           break;
         case 'golden': {
+          // Assist: Golden Weave не выдаётся. Гасим именно здесь, а не условием
+          // внутри QTE: слалом честно посчитал идеальный проход, просто с
+          // расширенными окнами эта кульминация не заработана — ни очков, ни
+          // фанфар. Для аналитики оставляем след, что событие было подавлено.
+          if (this.assist) { this.emit({ type: 'goldenSuppressed', reason: 'assist' }); break; }
           // Бонус растёт с классом: на Open голден заметно легче — плоские +1500
           // делали его фарм-классом (вердикт баланс-аудита)
           const gb = { novice: 400, open: 400, excellent: 700, masters: 1000 }[this.course.cls] ?? 700;
@@ -729,9 +793,32 @@ export class Run {
     }
   }
 
+  // Практика-загон: учёт попытки и снятие «холостого» темпа после slowTries.
+  // Публичные поля practice.tries / practice.speedMul читает HUD.
+  _practiceTry(grade) {
+    const p = this.practice;
+    p.tries++;
+    const slow = p.tries < p.slowTries;
+    const mul = slow ? p.slowMul : 1;
+    const changed = mul !== p.speedMul;
+    p.speedMul = mul;
+    this.emit({ type: 'practiceTry', tries: p.tries, grade, speedMul: mul, obstacle: p.type });
+    if (changed) {
+      this.popups.push({ text: 'Боевой темп!', color: '#ffd54a',
+        x: this.dog.x, y: this.dog.y - 3.2, t: 0 });
+      this.audio.reveal?.();
+      this.emit({ type: 'practiceFullSpeed', tries: p.tries });
+    }
+  }
+
   _applyResult(m, res) {
-    // Разминка: провалить нельзя — промах превращается в мягкий повтор захода
-    if (this.warmup && res.grade === 'miss') {
+    // Практика-загон: каждый разрешённый заход — попытка (и удачная, и промах).
+    // После slowTries попыток темп снимается до боевого — игрок доучивает тот же
+    // ритм на нормальной скорости.
+    if (this.practice) this._practiceTry(res.grade);
+    // Разминка и практика: провалить нельзя — промах превращается в мягкий
+    // повтор захода, снаряд не считается пройденным.
+    if ((this.warmup || this.practice) && res.grade === 'miss') {
       this.handler.commanding = false;
       this.popups.push({ text: 'Ничего, ещё раз!', color: '#9ff0b4', x: this.dog.x, y: this.dog.y - 2.6, t: 0 });
       this.audio.good();
@@ -749,8 +836,11 @@ export class Run {
     this.handler.commanding = false;
     const d = this.dog;
     const { grade, faults, label } = res;
-    const gradeText = { perfect: 'ИДЕАЛЬНО!', good: 'Хорошо!', late: 'Впритык…', miss: label || 'Ошибка!' }[grade];
-    const gradeColor = { perfect: '#ffd54a', good: '#69f0ae', late: '#ffab6b', miss: '#ff6b6b' }[grade];
+    // В Zen промах не подписывается красным «Ошибка!» — просто «Мимо, бывает».
+    const gradeText = this.zen && grade === 'miss' ? 'Мимо, бывает'
+      : { perfect: 'ИДЕАЛЬНО!', good: 'Хорошо!', late: 'Впритык…', miss: label || 'Ошибка!' }[grade];
+    const gradeColor = this.zen && grade === 'miss' ? '#cfd8dc'
+      : { perfect: '#ffd54a', good: '#69f0ae', late: '#ffab6b', miss: '#ff6b6b' }[grade];
     // Выше собаки, чтобы не спорить с кольцом следующего QTE
     this.popups.push({ text: gradeText, color: gradeColor, x: d.x, y: d.y - 2.6, t: 0 });
     // Микро-дельта тайминга (S1.11): учит игрока сдвигать нажатие
@@ -818,11 +908,34 @@ export class Run {
       // Планка дрожит от близкого пролёта
       if (m.o.type === 'jump' || m.o.type === 'wall') { m.state.rattle = 0.6; this.audio.creak(); }
       this.audio.crowdLevel(0.25);
+    } else if (this.zen) {
+      // Zen «Прогулка в парке»: промах — это просто «не получилось», а не кара.
+      // Убрано ВСЁ наказывающее: фолты, замедление, тряска камеры, поджатый
+      // хвост, ах толпы, рука судьи, десатурация. Собака не «сдувается» — она
+      // гуляет. Комбо всё же обнуляем: оно ведёт темп и слои музыки, и держать
+      // разгон на несделанном снаряде было бы враньём картинки, а не наказанием.
+      this.score.misses++;
+      this.score.combo = 0;
+      this.focus.perfectsSince = 0;
+      this.audio.click?.();
+      this.fx.dust(d.x, d.y);
+      // Планка всё равно падает физически: это реакция мира, а не штраф.
+      if ((m.o.type === 'jump' || m.o.type === 'wall') && label !== 'Отказ!') {
+        m.state.knocked = true;
+        this.audio.knock();
+        this.fx.barPieces(m.o.x, m.o.y, m.o.angle);
+      } else {
+        // Отказ считаем для статистики, но собака не тормозит и не может быть
+        // дисквалифицирована — строгий судья в Zen не работает.
+        this.score.refusals++;
+      }
+      this.emit({ type: 'zenMiss', obstacle: m.o.type });
     } else {
       this.score.misses++;
       this.score.combo = 0;
       this.focus.perfectsSince = 0;
-      this.score.faults += faults;
+      // Практика-загон: фолты не начисляются — прогон незачётный (this.unscored).
+      if (!this.practice) this.score.faults += faults;
       this.slowT = 0.6;
       if (hadCombo) { this.desatT = 0.55; this.audio.music?.dip(); }
       haptic('fault');
@@ -917,6 +1030,8 @@ export class Run {
   // потом темп против призрака/рекорда, потом «фон» — чистая зона и техника.
   _comment(m, grade) {
     const done = this.marks.filter(mm => mm.resolved).length;
+    // Zen: комментатор не разбирает промахи — судейской драмы в прогулке нет.
+    if (grade === 'miss' && this.zen) return;
     if (grade === 'miss') {
       this.say(this.score.refusals && m.refusalT > 0 ? 'refusal' : 'fault');
       return;
