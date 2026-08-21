@@ -3,6 +3,7 @@ import { Path } from './spline.js';
 import { Qte, QTE_DEFS, makeDecoys, DECOY_CHANCE, GROOVE_BPM, GROOVE_WINDOWS } from './qte.js';
 import { computeSct, BREEDS } from './scoring.js';
 import { haptic } from './haptics.js';
+import { Commentator, temperamentFor } from './soul.js';
 
 const TAKEOFF = 1.3;    // м до снаряда — точка отталкивания: идеальный момент команды
 const SYNC_TYPES = new Set(['weave', 'aframe', 'dogwalk', 'seesaw', 'table', 'tunnel',
@@ -23,8 +24,15 @@ export const HINTS = {
 };
 
 export class Run {
-  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1, audioOffset = 0 }) {
+  constructor({ course, breed, audio, particles, renderer, modifier = 'none', windowMul = 1,
+    audioOffset = 0, dogName = null, bestTime = null }) {
     this.audioOffset = audioOffset; // калибровка задержки звука для groove (сек)
+    // S3: комментатор ринга — «радио-строка» трансляции по триггерам забега
+    this.dogName = dogName || breed.name;
+    this.bestTime = bestTime;       // личный рекорд трассы: питает реплику «рекорд ринга»
+    this.commentator = new Commentator();
+    // S3.7: темперамент породы — чистая косметика (приседает/кланяется/лает/падает)
+    this.temper = temperamentFor(breed.id);
     this.bonusPoints = 0;           // событийные бонусы очков (Golden Weave и т.п.)
     this.course = course;
     this.breed = breed;
@@ -90,8 +98,44 @@ export class Run {
     m.qte.w *= 0.35; // окно сжимается до 35% ширины (симметрично вокруг цели)
     this.popups.push({ text: '⚡ РИСК ×2!', color: '#ff8a65', x: this.dog.x, y: this.dog.y - 3.0, t: 0 });
     this.audio.reveal();
+    this.say('risk');
     this.emit({ type: 'risk' });
     return true;
+  }
+
+  // Погладить собаку в стойке (S3.1, Nintendogs-крючок). Только на ритуале старта.
+  // Микро-бафф «спокойный старт»: дрожь уходит, окно первого снаряда ×1.1.
+  pet() {
+    if (this.phase !== 'countdown') return false;
+    this.dog.petT = 1.0;
+    this.fx.hearts(this.dog.x, this.dog.y, 7);
+    this.audio.good?.();
+    haptic('perfect');
+    if (!this.petted) {
+      this.petted = true;
+      this.calmStart = true;
+      this.popups.push({ text: '💙 Спокойный старт', color: '#8fd8ff',
+        x: this.dog.x, y: this.dog.y - 2.4, t: 0 });
+      this.emit({ type: 'pet' });
+    }
+    return true;
+  }
+
+  // Лай задиры на призрака: голос + попап, не чаще раза в 2с
+  _bark() {
+    if (this.time - (this._lastBark ?? -9) < 2) return;
+    this._lastBark = this.time;
+    this.audio.bark?.(this.breed.size || 1);
+    this.popups.push({ text: 'Гав! Гав!', color: '#ffd54a',
+      x: this.dog.x, y: this.dog.y - 2.8, t: 0 });
+    this.emit({ type: 'bark' });
+  }
+
+  // Реплика комментатора: сам решает, звучать ли (кулдаун/приоритет внутри).
+  say(trigger, ctx = {}) {
+    const line = this.commentator.say(trigger, { dog: this.dogName, ...ctx });
+    if (line) this.emit({ type: 'commentary', trigger, text: line });
+    return line;
   }
 
   emit(e) { this.events.push(e); }
@@ -102,7 +146,11 @@ export class Run {
   // Опции QTE по типу снаряда: прогрессия механик и параметры V4.
   _qteOpts(type) {
     const cls = this.course.cls;
-    const opts = { windowScale: this.windowScale };
+    // «Спокойный старт» (S3.1): ласка перед стартом расширяет окно ПЕРВОГО снаряда
+    // на 10% — тёплый жест, а не боевой бафф.
+    const calm = this.calmStart && !this._calmUsed;
+    if (calm) this._calmUsed = true;
+    const opts = { windowScale: this.windowScale * (calm ? 1.1 : 1) };
     if (type === 'tire') {
       // Double-tap шины — механика Excellent+; раньше это обычный тап
       opts.noApex = cls === 'novice' || cls === 'open';
@@ -159,6 +207,7 @@ export class Run {
     if (this.hitstop > 0) { this.hitstop -= rawDt; dt *= 0.15; }
     if (this.hintSlow > 0) { this.hintSlow -= rawDt; dt *= 0.35; if (this.hintSlow <= 0) this.hintText = null; }
     if (this.slowmoT > 0) { this.slowmoT -= rawDt; dt *= 0.5; }
+    this.commentator.update(rawDt);
     if (this.desatT > 0) this.desatT -= dt;
     if (this.flashT > 0) this.flashT -= rawDt;
     this.time += this.phase === 'running' ? dt : 0;
@@ -167,19 +216,27 @@ export class Run {
     if (this.phase === 'countdown') {
       // Ритуал старта: полная тишина, собака дрожит в стойке, судья поднимает руку.
       this.countdownT -= dt;
-      this.dog.tremble = this.countdownT < 1.6;
+      // Погладили — собака спокойна: дрожь в стойке уходит (S3.1)
+      this.dog.tremble = this.countdownT < 1.6 && !this.calmStart;
+      // Темперамент на старте: бордер приседает от нетерпения, шелти кланяется
+      if (this.temper.quirk === 'crouch' || this.temper.quirk === 'bow') {
+        this.dog.pose = this.temper.quirk;
+        this.dog.poseK = 1;
+      }
       if (this.countdownT <= 0) {
         this.phase = 'running';
         this.dog.tremble = false;
+        this.dog.pose = null;
         this.audio.whistle();
         this.audio.crowdLevel(0.3);
         this.audio.music?.setState('run');
+        this.say('start');
         this.emit({ type: 'go' });
       }
     }
 
     if (this.phase === 'running') this._updateRunning(dt);
-    if (this.phase === 'finished') this.finishT += dt;
+    if (this.phase === 'finished') { this.finishT += dt; this._updateVictoryLap(dt); }
 
     this._updateDogPose(dt);
     this._updateHandler(dt);
@@ -272,6 +329,7 @@ export class Run {
     // Финишный спурт активируется, когда все снаряды пройдены
     if (!this.sprint.active && this.marks.every(mm => mm.resolved) && this.phase === 'running') {
       this.sprint.active = true;
+      this.say('sprint');
       this.emit({ type: 'sprint' });
     }
     if (this.sprint.active) this.sprint.boost = Math.max(0, this.sprint.boost - dt * 0.2);
@@ -337,6 +395,17 @@ export class Run {
       this.activeIdx = -1;
     }
 
+    // Хлоя-задира: лает, когда призрак обходит её или она обходит призрака (S3.7)
+    if (this.ghost && this.ghost.time > 0) {
+      const gd = this.time / this.ghost.time * this.path.length;
+      const ghostAhead = gd > d.dist;
+      if (this._ghostAheadPrev === undefined) this._ghostAheadPrev = ghostAhead;
+      else if (ghostAhead !== this._ghostAheadPrev) {
+        this._ghostAheadPrev = ghostAhead;
+        if (this.temper.quirk === 'barkGhost') this._bark();
+      }
+    }
+
     // Босс-призрак финишировал раньше нас — толпа ахает
     if (this.ghost && !this._ghostFinished && this.time >= this.ghost.time) {
       this._ghostFinished = true;
@@ -357,8 +426,49 @@ export class Run {
       else if (this.score.faults <= 10) { this.audio.cheer(true); }
       else this.audio.sad();
       this.fx.confettiBurst(d.x, d.y, clean ? 120 : 40, this.breed.finishFx || null);
+      this.say(clean ? 'finishClean' : 'finishFault', { t: this.time.toFixed(2) });
+      // Победный круг (S3.3): только за чистый прогон — 3.4с вдоль трибун,
+      // зрители встают, хендлер падает на колени, дальше кадр-полароид.
+      if (clean && !this.warmup) {
+        this.victoryLap = { t: 0, dur: 3.4, done: false, dir: 1 };
+        this.r.crowdStanding = true;
+      } else {
+        // Выходка на финише: джек драматично падает, пудель крутит пируэт (S3.7)
+        if (this.temper.quirk === 'faint') { d.pose = 'faint'; this.quirkT = 0; }
+      }
       this.emit({ type: 'finish' });
     }
+  }
+
+  // Победный круг: собака мчится вдоль трибуны, хендлер на коленях, конфетти.
+  // По завершении выставляется photoReady — экран снимает кадр-полароид.
+  _updateVictoryLap(dt) {
+    const lap = this.victoryLap;
+    if (!lap || lap.done) return;
+    lap.t += dt;
+    this.handler.kneel = lap.t > 1.0;      // хендлер опускается на колени
+    this.audio.crowdLevel(1);
+    this._lapFx = (this._lapFx || 0) + dt;
+    if (this._lapFx > 0.5) {               // ленты вдоль круга
+      this._lapFx = 0;
+      this.fx.confettiBurst(this.dog.x, this.dog.y - 1, 18, this.breed.finishFx || null);
+    }
+    if (lap.t >= lap.dur) {
+      lap.done = true;
+      this.photoReady = true;
+      // Выходка темперамента приберегается на кадр: пируэт/падение в объектив
+      if (this.temper.quirk === 'pirouette') { this.dog.pose = 'pirouette'; this.quirkT = 0; }
+      else if (this.temper.quirk === 'faint') { this.dog.pose = 'faint'; this.quirkT = 0; }
+    }
+  }
+
+  // Пропуск круга по вводу игрока: сразу к кадру
+  skipVictoryLap() {
+    const lap = this.victoryLap;
+    if (!lap || lap.done) return false;
+    lap.t = lap.dur;
+    this._updateVictoryLap(0);
+    return true;
   }
 
   _waitPoint(m) {
@@ -464,6 +574,7 @@ export class Run {
           this.r.zoomPunch();
           haptic('golden');
           this.audio.fanfare();
+          this.say('golden');
           this.emit({ type: 'goldenWeave' });
           break;
         }
@@ -604,6 +715,7 @@ export class Run {
       this.emit({ type: 'fault', faults });
     }
     this.emit({ type: 'grade', grade });
+    this._comment(m, grade);
     this.audio.music?.setIntensity(Math.floor(this.score.combo));
 
     // Micro-slow-mo на последнем снаряде перед спуртом
@@ -612,6 +724,37 @@ export class Run {
 
     // Эффект прохождения снаряда
     this._passEffects(m, grade);
+  }
+
+  // Что скажет комментатор после снаряда: сначала драма (штраф/отказ),
+  // потом темп против призрака/рекорда, потом «фон» — чистая зона и техника.
+  _comment(m, grade) {
+    const done = this.marks.filter(mm => mm.resolved).length;
+    if (grade === 'miss') {
+      this.say(this.score.refusals && m.refusalT > 0 ? 'refusal' : 'fault');
+      return;
+    }
+    if (this.ghost && this.ghost.time > 0 && done % 3 === 0) {
+      const lead = (m.entryD / this.path.length) * this.ghost.time - this.time;
+      this.say(lead >= 0 ? 'ghostAhead' : 'ghostBehind',
+        { ghost: this.ghost.name, t: Math.abs(lead).toFixed(1) });
+      return;
+    }
+    // Темп рекорда: прогноз финиша по текущей доле пути бьёт личный рекорд трассы
+    if (this.bestTime && done >= 3 && !this._saidRecord) {
+      const frac = this.dog.dist / this.path.length;
+      if (frac > 0.35 && this.time / frac < this.bestTime * 0.97) {
+        this._saidRecord = true;
+        this.say('record');
+        return;
+      }
+    }
+    if (grade === 'perfect') {
+      if (m.o.type === 'weave') { this.say('weave'); return; }
+      if (['aframe', 'dogwalk', 'seesaw'].includes(m.o.type)) { this.say('contact'); return; }
+      if (this.score.combo >= 3) { this.say('streak', { n: Math.floor(this.score.combo) }); return; }
+    }
+    if (this.score.faults === 0 && done >= 3 && done % 3 === 0) this.say('cleanZone', { n: done });
   }
 
   _passEffects(m, grade) {
@@ -639,6 +782,30 @@ export class Run {
   // ---------- ПОЗА СОБАКИ ----------
   _updateDogPose(dt) {
     const d = this.dog;
+    // Победный круг: собака идёт не по сплайну, а вдоль ближней трибуны
+    const lap = this.victoryLap;
+    if (lap && !lap.done) {
+      const fw = this.course.field.w;
+      if (d.x > fw - 4) lap.dir = -1;
+      if (d.x < 4) lap.dir = 1;
+      const v = 7.0;
+      d.x += v * dt * lap.dir;
+      d.y += (2.8 - d.y) * Math.min(1, dt * 1.4);
+      d.heading = lap.dir > 0 ? 0 : Math.PI;
+      d.speed = v;
+      d.runPhase += v * dt * 2.2;
+      d.happy = true;
+      d.elevation = 0; d.airborne = false; d.hidden = false;
+      this.r.crowdFocusX = d.x;
+      this._pawAcc = (this._pawAcc || 0) + v * dt;
+      if (this._pawAcc > 0.9) { this._pawAcc = 0; this.fx.paw(d.x, d.y, d.heading, this.breed.pawColor || null); }
+      if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9);
+      return;
+    }
+    if (d.pose === 'faint' || d.pose === 'pirouette') {
+      this.quirkT = (this.quirkT || 0) + dt;
+      d.poseK = Math.min(1, this.quirkT / 0.8);
+    }
     const p = this.path.pointAt(d.dist);
     const tg = this.path.tangentAt(d.dist);
     // Боковое виляние в слаломе: собака зигзагом обходит стойки в такт битам —
@@ -675,6 +842,7 @@ export class Run {
       this.fx.dust(d.x + 0.3, d.y);
       this.r.kick(0, 3);
     }
+    if (d.petT > 0) d.petT = Math.max(0, d.petT - dt * 0.9); // ~1.1с блаженства
     if (d.landT > 0) d.landT = Math.max(0, d.landT - dt * 6);
     if (d.popT > 0) d.popT = Math.max(0, d.popT - dt * 5); // ~0.2с пружина perfect
 
@@ -716,6 +884,18 @@ export class Run {
 
   _updateHandler(dt) {
     const h = this.handler, d = this.dog;
+    // Победный круг: хендлер держится рядом с собакой, а не на сплайне
+    if (this.victoryLap) {
+      const tx2 = d.x - Math.cos(d.heading) * 2.6, ty2 = d.y + 1.8;
+      const k2 = Math.min(1, dt * 2.2);
+      const nx2 = h.x + (tx2 - h.x) * k2, ny2 = h.y + (ty2 - h.y) * k2;
+      h.speed = Math.hypot(nx2 - h.x, ny2 - h.y) / Math.max(dt, 1e-6);
+      h.facing = (nx2 - h.x) >= 0 ? 1 : -1;
+      h.x = nx2; h.y = ny2;
+      h.runPhase += h.speed * dt * 2.4;
+      if (h.speech) { h.speech.t += dt; if (h.speech.t > 1.6) h.speech = null; }
+      return;
+    }
     // Хендлер бежит параллельно, ближе к центру поля, чуть позади.
     const behind = this.path.pointAt(Math.max(0, d.dist - 1.6));
     const tg = this.path.tangentAt(Math.max(0, d.dist - 1.6));
@@ -737,7 +917,9 @@ export class Run {
 
   _updateCamera(dt) {
     const cam = this.r.cam;
-    const ahead = this.path.pointAt(Math.min(this.path.length, this.dog.dist + 3.5));
+    const lap = this.victoryLap;
+    const ahead = lap ? { x: this.dog.x, y: this.dog.y }
+      : this.path.pointAt(Math.min(this.path.length, this.dog.dist + 3.5));
     const tx = (this.dog.x * 0.55 + ahead.x * 0.45);
     const ty = (this.dog.y * 0.55 + ahead.y * 0.45);
     const k = Math.min(1, dt * 3.5);

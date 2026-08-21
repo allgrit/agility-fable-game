@@ -10,3 +10,7 @@ tests/shots/
 # image-харнесс: ключ и мокапы не в публичный репо
 tools/.imagegen-key
 tools/mockups/
+
+# черновики агентов и рабочие деревья
+.scratch/
+.worktrees/

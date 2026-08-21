@@ -98,7 +98,9 @@ export class Renderer {
         const rnd = seed - Math.floor(seed);
         // Волна оваций расходится от позиции собаки (crowdFocusX)
         const dist = Math.abs(i - this.crowdFocusX);
-        const bounce = Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
+        // Овация победного круга (S3.3): зрители ВСТАЮТ — ряд поднимается целиком
+        const stand = this.crowdStanding ? 0.55 : 0;
+        const bounce = stand + Math.max(0, Math.sin(this.time * (3 + rnd * 3) - dist * 0.45)) * hype * 0.35
           // Вздрагивание всей трибуны при сильной тряске (сбитая планка)
           - (this.cam.shake > 0.3 ? 0.25 : 0);
         for (const yy of [off, field.h - off]) {
@@ -478,6 +480,21 @@ export class Renderer {
     }
     // Дрожь в стойке перед стартом
     if (dog.tremble) ctx.translate(Math.sin(this.time * 40) * 0.8, 0);
+    // Выходки темперамента (S3.7) — чистая косметика, на баланс не влияют
+    const poseK = dog.poseK ?? 1;
+    if (dog.pose === 'crouch') {          // бордер: приседает от нетерпения
+      ctx.translate(0, 2.2 + Math.sin(this.time * 6) * 0.5);
+      ctx.scale(1.04, 0.82);
+    } else if (dog.pose === 'bow') {      // шелти: поклон-потягушка
+      ctx.rotate(0.30 * (0.85 + Math.sin(this.time * 2.4) * 0.15));
+      ctx.translate(0, 1.2);
+    } else if (dog.pose === 'faint') {    // джек: драматично падает на бок
+      ctx.rotate(poseK * Math.PI * 0.5);
+      ctx.translate(0, poseK * 3);
+    } else if (dog.pose === 'pirouette') { // пудель: пируэт после чистого прогона
+      ctx.rotate(poseK * Math.PI * 4);
+      ctx.scale(1 - poseK * 0.06, 1 - poseK * 0.06);
+    }
 
     // Ноги
     ctx.strokeStyle = breed.legs || breed.body; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
@@ -489,9 +506,12 @@ export class Renderer {
       ctx.lineTo(lx + Math.sin(swing) * 7, 9 + Math.abs(Math.cos(swing)) * 2);
       ctx.stroke();
     }
+    // Ласка (S3): собака тает под рукой — хвост частит, уши прижаты, глаза щурятся
+    const petted = (dog.petT || 0) > 0;
     // Хвост: радость — виляет, после ошибки (sadT) — поджат вниз
     const sad = dog.sadT > 0;
-    const wag = sad ? 1 : Math.sin(this.time * (dog.happy ? 18 : 8)) * (dog.happy ? 7 : 3);
+    const wag = sad ? 1
+      : Math.sin(this.time * (petted ? 26 : dog.happy ? 18 : 8)) * (petted ? 9 : dog.happy ? 7 : 3);
     ctx.strokeStyle = breed.body; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(-13, -3);
     if (sad) ctx.quadraticCurveTo(-17, 3, -18, 8);
@@ -525,7 +545,30 @@ export class Renderer {
     if (breed.neckItem) {
       const ni = breed.neckItem;
       const col = ni.color === 'rainbow' ? `hsl(${(this.time * 90) % 360}, 85%, 60%)` : ni.color;
-      if (ni.kind === 'bandana') {
+      if (ni.kind === 'rosette') {
+        // Розетка подиума: лепестковый круг с двумя лентами вниз
+        const rx = 9.5 * stretch, ry = -1.5;
+        ctx.strokeStyle = '#7a5230'; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(rx, ry, 4.6, 3.4, -0.2, 0.4, Math.PI * 1.4);
+        ctx.stroke();
+        ctx.fillStyle = col;
+        for (let i = 0; i < 8; i++) {   // лепестки
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.ellipse(rx + Math.cos(a) * 1.7, ry + 2.4 + Math.sin(a) * 1.7, 1.5, 1.0, a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#fff8dc';
+        ctx.beginPath(); ctx.arc(rx, ry + 2.4, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+        for (const off of [-1.0, 1.0]) {
+          ctx.beginPath();
+          ctx.moveTo(rx + off * 0.6, ry + 3.6);
+          ctx.lineTo(rx + off * 1.6, ry + 7.4);
+          ctx.stroke();
+        }
+      } else if (ni.kind === 'bandana') {
         ctx.fillStyle = col;
         ctx.beginPath();
         ctx.moveTo(8 * stretch, -5);
@@ -579,7 +622,12 @@ export class Renderer {
     ctx.fill();
     ctx.fillStyle = '#222';
     ctx.beginPath(); ctx.arc(21 * stretch, -3 + bob, 1.3, 0, Math.PI * 2); ctx.fill(); // нос
-    if (breed.eye) { // голубой глаз с зрачком
+    if (petted) { // блаженный прищур: глаз-дужка вместо круга
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 0.9; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(15.5 * stretch, -5.0 + bob, 1.5, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+    } else if (breed.eye) { // голубой глаз с зрачком
       ctx.fillStyle = breed.eye;
       ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.35, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#222';
@@ -588,7 +636,7 @@ export class Renderer {
       ctx.beginPath(); ctx.arc(15.5 * stretch, -5.5 + bob, 1.1, 0, Math.PI * 2); ctx.fill(); // глаз
     }
     // Уши: торчком в ожидании команды (alert), назад на скорости/в полёте
-    const earBack = dog.alert ? -0.35 : dog.airborne ? 0.8 : speedK * 0.5;
+    const earBack = petted ? 1.5 : dog.alert ? -0.35 : dog.airborne ? 0.8 : speedK * 0.5;
     ctx.fillStyle = breed.ear;
     for (const side of [-1, 1]) {
       ctx.save();
@@ -609,7 +657,7 @@ export class Renderer {
       }
     }
     // Язык на радостях
-    if (dog.happy) {
+    if (dog.happy || petted) {
       ctx.fillStyle = '#e2697d';
       ctx.beginPath();
       ctx.ellipse(19 * stretch, 0.5 + bob, 1.5, 2.6 + Math.sin(this.time * 14) * 0.5, 0.3, 0, Math.PI * 2);
@@ -637,9 +685,15 @@ export class Renderer {
     ctx.translate(s.x, s.y);
     const flip = h.facing < 0 ? -1 : 1;
     ctx.scale(flip * z / 24, z / 24);
+    // Хендлер на коленях (S3.3): корпус оседает, ноги подогнуты, руки к собаке
+    if (h.kneel) ctx.translate(0, 9);
     // Ноги в беге
     ctx.strokeStyle = '#26415e'; ctx.lineWidth = 4; ctx.lineCap = 'round';
     for (const ph of [0, Math.PI]) {
+      if (h.kneel) { // колени: голень уходит назад, а не шагает
+        ctx.beginPath(); ctx.moveTo(0, 8); ctx.lineTo(-7 + (ph ? 3 : 0), 12); ctx.stroke();
+        continue;
+      }
       const sw = Math.sin(run + ph) * 0.8 * Math.min(1, h.speed / 4 + 0.2);
       ctx.beginPath(); ctx.moveTo(0, 8);
       ctx.lineTo(Math.sin(sw) * 6, 20); ctx.stroke();
@@ -652,7 +706,8 @@ export class Renderer {
     ctx.fill();
     // Руки (жестикуляция при команде)
     ctx.strokeStyle = shirt; ctx.lineWidth = 3.6;
-    const cmdArm = h.commanding ? -1.9 + Math.sin(this.time * 16) * 0.15 : Math.sin(run) * 0.7;
+    const cmdArm = h.kneel ? -0.5 + Math.sin(this.time * 5) * 0.2
+      : h.commanding ? -1.9 + Math.sin(this.time * 16) * 0.15 : Math.sin(run) * 0.7;
     ctx.beginPath(); ctx.moveTo(4, -5); ctx.lineTo(4 + Math.cos(cmdArm) * 9, -5 + Math.sin(cmdArm) * 9); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-4, -5); ctx.lineTo(-4 - Math.cos(run) * 5, -5 + Math.sin(run + Math.PI) * 6); ctx.stroke();
     // Голова

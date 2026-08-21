@@ -75,7 +75,10 @@ const PLAY = `(async (opts = {}) => {
   }
   run.finishT = 4;
   delete run.update;
-  await new Promise(r => setTimeout(r, 700));
+  await new Promise(r => setTimeout(r, 400));
+  // S3: чистый прогон уходит на победный круг и кадр-полароид — игрок их листает
+  A.skipCeremony();
+  await new Promise(r => setTimeout(r, 400));
   return {
     warmup: !!run.warmup,
     faults: run.score.faults, perfects: run.score.perfects, total: run.marks.length,
@@ -245,6 +248,9 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
     const bossWon = !!A.app.bossWin;
     // Победа применяется сразу: класс уже Open; ENTER откроет газету
     const afterCls = localStorage.getItem('agility_class');
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); // → подиум (S3.5)
+    await new Promise(r => setTimeout(r, 300));
+    const podiumShown = A.app.state === 'podium';
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); // → газета
     await new Promise(r => setTimeout(r, 300));
     const newsShown = A.app.state === 'news';
@@ -252,12 +258,13 @@ console.log('# ЦИКЛ 5: Прогрессия класса и разблоки
     await new Promise(r => setTimeout(r, 400));
     const types = A.app.run ? [...new Set(A.app.run.course.obstacles.map(o => o.type))] : [];
     return { qualified: res.result?.qualified, bossStage, hasGhost, ghostName,
-      bossWon, newsShown, afterCls, types };
+      bossWon, podiumShown, newsShown, afterCls, types };
   })()`);
   check('квалификация ведёт к боссу Эйве (этап 6, призрак на трассе)',
     r.qualified && r.bossStage && r.hasGhost && r.ghostName === 'Эйва', JSON.stringify(r));
-  check('победа над боссом: газета и переход в Open с новыми механиками',
-    r.bossWon && r.newsShown && r.afterCls === 'open' && r.types.includes('weave'), JSON.stringify(r));
+  check('победа над боссом: подиум, газета и переход в Open с новыми механиками',
+    r.bossWon && r.podiumShown && r.newsShown && r.afterCls === 'open' && r.types.includes('weave'),
+    JSON.stringify(r));
 }
 
 // ============================================================

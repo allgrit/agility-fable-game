@@ -145,10 +145,9 @@ export function titleFor(level) {
   return t ? t.tag : '';
 }
 
-// Начисление XP; возвращает {gained, levelsUp: [новые уровни]}
-export function earnXp(meta, breedId, { points, stars, clean }) {
+// Прямое начисление XP (прогон, ритуал угощения); возвращает {gained, levelsUp}
+export function addXp(meta, breedId, gained) {
   const d = dogState(meta, breedId);
-  const gained = Math.round(points / 10) + stars * 25 + (clean ? 50 : 0);
   d.xp += gained;
   const levelsUp = [];
   while (d.level < 30 && d.xp >= xpToNext(d.level)) {
@@ -157,6 +156,11 @@ export function earnXp(meta, breedId, { points, stars, clean }) {
     levelsUp.push(d.level);
   }
   return { gained, levelsUp };
+}
+
+// Начисление XP за прогон; возвращает {gained, levelsUp: [новые уровни]}
+export function earnXp(meta, breedId, { points, stars, clean }) {
+  return addXp(meta, breedId, Math.round(points / 10) + stars * 25 + (clean ? 50 : 0));
 }
 
 // Розетки за уровни собак: 10 → 1, 20 → 2, 30 → 3

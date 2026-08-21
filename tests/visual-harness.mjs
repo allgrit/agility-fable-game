@@ -56,6 +56,7 @@ const RUNNER = `(async (opts) => {
   run.update = () => {};
   const pred = new Function('run', 'm', 'q', 't', 'return (' + opts.predicate + ');');
   let guard = 0, missArmed = opts.missAt || 0;
+  if (opts.pet) A.pet(); // S3: гладим собаку на ритуале старта
   while (guard++ < 60000 && run.phase !== 'finished') {
     const m = run.activeMark;
     const q = m && m.qte;
@@ -98,6 +99,22 @@ const RUNNER = `(async (opts) => {
     // Проверка предиката и на пост-обновлённом состоянии (для мгновенных фаз)
     const m2 = run.activeMark, q2 = m2 && m2.qte, t2 = q2 ? run.time - m2.qteStart : 0;
     if (pred(run, m2, q2, t2)) { run.update = () => {}; return { hit: true, time: +run.time.toFixed(2) }; }
+  }
+  if (opts.lapT !== undefined) {
+    // S3: победный круг живёт уже в фазе finished — докручиваем физику вручную
+    let g2 = 0;
+    while (run.victoryLap && !run.victoryLap.done && run.victoryLap.t < opts.lapT && g2++ < 6000) {
+      proto.update.call(run, 1 / 60);
+    }
+    run.update = () => {};
+    return { hit: !!run.victoryLap, time: +run.time.toFixed(2) };
+  }
+  if (opts.photo) {
+    // Пропускаем круг: экран сам снимет кадр-полароид на ближайшем rAF
+    if (run.skipVictoryLap) run.skipVictoryLap();
+    run.update = () => {};
+    await new Promise(r => setTimeout(r, 900));
+    return { hit: window.__agility.app.state === 'photo' };
   }
   if (opts.thenFinishT !== undefined) {
     // update остаётся замороженным — иначе finishT растёт в реальном времени и этап уплывает
@@ -256,15 +273,54 @@ const SCENES = [
     predicate: "m && m.decoys && m.decoys.revealed && m.qte.state==='active'",
     criteria: 'Обманка раскрыта: крупная надпись «ЖМИ!» + кейкап настоящей клавиши (может быть НЕ ПРОБЕЛ — ←/↑/↓). Обманки теперь настоящие и редкие.',
   },
+  // ---- S3 «Душа собаки» ----
+  {
+    name: '35-commentary', mode: 'career', cls: 'open', stage: 2,
+    predicate: "run.commentator.line && run.commentator.line.t > 0.5 && run.commentator.line.t < 1.4 && run.marks.some(x=>x.resolved)",
+    criteria: 'Комментатор ринга: под шапкой HUD голубая пилюля с иконкой 🎙 и курсивной репликой трансляции (например «Чисто! Пока ни одной планки на траве.»). Строка не наезжает на панели времени/фолтов и на QTE внизу.',
+  },
+  {
+    name: '36-petting', mode: 'career', cls: 'novice', stage: 1, pet: true,
+    predicate: "run.phase === 'countdown' && run.dog.petT > 0.55",
+    criteria: 'Ласка на старте (S3.1): собака в стойке с ПРИЖАТЫМИ ушами, прищуренным глазом-дужкой и высунутым языком, вокруг вверх летят розовые сердечки, под «На старт…» зелёная плашка «💙 Спокойный старт — дрожь ушла», рядом попап «💙 Спокойный старт».',
+  },
+  {
+    name: '40-temperament-bow', mode: 'career', cls: 'novice', stage: 1, breedIdx: 1,
+    predicate: "run.phase === 'countdown' && run.countdownT < 1.0 && run.dog.pose === 'bow'",
+    criteria: 'Темперамент шелти (S3.7): на ритуале старта собака в ПОКЛОНЕ-потягушке — корпус наклонён вперёд-вниз, морда у земли; надпись «На старт…» и плашка приглашения погладить на месте.',
+  },
+  {
+    name: '41-victory-lap', mode: 'career', cls: 'novice', stage: 1, lapT: 2.0,
+    predicate: 'false',
+    criteria: 'Победный круг (S3.3): собака мчится вдоль ближней трибуны с высунутым языком, зрители ВСТАЛИ (ряд поднят выше обычного), хендлер рядом на коленях с поднятыми руками, в воздухе конфетти. HUD ещё виден, протокол судьи НЕ показан.',
+  },
+  {
+    name: '42-photo-finish', mode: 'career', cls: 'novice', stage: 1, photo: true,
+    predicate: 'false',
+    criteria: 'Фото-финиш (S3.3): на тёмном фоне заголовок «📸 ФОТО-ФИНИШ» и бумажный ПОЛАРОИД с наклоном — сверху кадр сцены, снизу рукописная подпись «Хлоя · NN.NNс», строка титула и трассы, мелкие «🐕 Agility Trial!» и дата; под карточкой кнопки «📤 Поделиться» и жёлтая «▶ К протоколу».',
+  },
+  {
+    name: '45-photo-mode', mode: 'career', cls: 'open', stage: 2, setup: 'photoMode',
+    predicate: "run.dog.airborne && run.dog.elevation > 0.6",
+    criteria: 'Фото-режим с паузы (S3.8): мир заморожен на прыжке, HUD спрятан, кадр обрамлён белой рамкой с уголками-визиром, сверху подсказка «📸 Фото-режим · стрелки — кадр · +/− зум · S — сохранить PNG», внизу слева «🐕 Agility Trial!», справа кличка, по центру кнопки −, +, 💾 PNG, ✕ Выход.',
+  },
 ];
 
 const manifest = [];
 for (const sc of SCENES) {
   const res = await page.evaluate(`${RUNNER}(${JSON.stringify({
-    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx,
+    mode: sc.mode, cls: sc.cls, stage: sc.stage, realIdx: sc.realIdx, breedIdx: sc.breedIdx, pet: sc.pet,
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
-    riskFirst: sc.riskFirst, testDrive: sc.testDrive,
+    riskFirst: sc.riskFirst, testDrive: sc.testDrive, lapT: sc.lapT, photo: sc.photo,
   })})`);
+  if (sc.setup === 'photoMode') {
+    // S3.8: включаем фото-режим и слегка приближаем кадр
+    await page.evaluate(`(() => {
+      const A = window.__agility;
+      A.togglePhotoMode();
+      A.app.photoMode.zoom = 1.25;
+    })()`);
+  }
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)
     // и чистим конфетти/попапы последнего перфекта — кадр остаётся читаемым
@@ -348,6 +404,71 @@ const SCREENS = [
       A.app.state = 'board';
     })()`,
     criteria: 'Экран лидерборда: под заголовком «🏆 ЛУЧШИЕ ПРОГОНЫ» голубая строка онлайн-топа вида «🌐 1. Хлоя 2450 · 2. Рекс 2100 · 3. Джек 1980 (ты #7)», ниже локальная таблица и достижения — без наложения.',
+  },
+  {
+    name: '37-menu-idle-scratch',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.state = 'menu';
+      A.app.lastInputT = A.app.t;      // не спим — показываем выходку
+      A.menuIdle.set('scratch');
+      A.menuIdle.t = 0.5;              // середина чесания
+    })()`,
+    criteria: 'Меню, собака живёт (S3.2): выбранная карточка Хлои — собака накренилась и ЧЕШЕТСЯ задней лапой у уха (лапа поднята к голове), остальные карточки статичны. Вёрстка меню не поехала.',
+  },
+  {
+    name: '38-menu-idle-sleep',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.state = 'menu';
+      A.app.lastInputT = A.app.t - 60;  // минута без ввода → сон
+      A.menuIdle.set('sleep');
+    })()`,
+    criteria: 'Меню, собака заснула (S3.2): на выбранной карточке собака осела к земле, глаз закрыт дужкой, уши обвисли, лапы поджаты, над головой всплывают «z z z».',
+  },
+  {
+    name: '39-dossier',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.meta.counters.obstacleStats = { jump: { seen: 24, perfect: 15 }, weave: { seen: 9, perfect: 8 },
+        tunnel: { seen: 7, perfect: 3 } };
+      A.meta.counters.bestTime = { aussie: 28.44 };
+      A.meta.rosettes = 4;
+      A.app.state = 'dossier';
+    })()`,
+    criteria: 'Досье собаки (S3.7): панель «📖 Досье собаки» — слева живой портрет Хлои, справа кличка с кнопкой «✏ переименовать» и строкой породы/уровня, ниже строки-пилюли: Характер «Задира», Повадка, Любимый снаряд «слалом (89% идеальных)», Лучшее чистое время 28.44с, розетки, золото. Ничего не наезжает.',
+  },
+  {
+    name: '43-podium',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = { warmup: false, bossCls: 'novice', eliminated: false, time: 30.1,
+        ghost: { name: 'Эйва', time: 33.0 }, course: { name: 'Босс: Эйва' } };
+      A.app.result = { qualified: true, clean: true, stars: 3 };
+      A.app.breedIdx = 3;
+      A.app.podiumDone = false;
+      A.app.state = 'results';
+      A.openPodium();
+    })()`,
+    criteria: 'Подиум-церемония (S3.5): «🏅 ЦЕРЕМОНИЯ НАГРАЖДЕНИЯ», строка «Хлоя — ПЕРВОЕ МЕСТО!», три тумбы 2-1-3 (центральная выше и подсвечена жёлтым), на центральной — Хлоя с розеткой на ошейнике, на боковых — серые силуэты соперников; внизу «ENTER / тап — дальше».',
+  },
+  {
+    name: '44-treat',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.treatDone = false;
+      A.openTreat();
+      A.treatAdvance();          // шаг «Дай лапу!»
+    })()`,
+    criteria: 'Ритуал угощения (S3.6): экран «🍪 Угощение», крупная команда «Дай лапу!», собака СИДИТ и тянет переднюю лапу вперёд, три точки прогресса (первая закрашена), внизу подсказка «Тап / ПРОБЕЛ — команда · ESC — пропустить».',
   },
 ];
 for (const sc of SCREENS) {

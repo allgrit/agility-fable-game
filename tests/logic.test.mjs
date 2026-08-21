@@ -648,3 +648,95 @@ test('каталог косметики валиден: id уникальны, �
   assert.equal(blackbi.merle, null);
   assert.equal(blackbi.tan, null);
 });
+
+// ---------- S3 «Душа собаки» ----------
+test('комментатор: банк реплик достаточен, ротация без повторов, кулдаун и приоритет', async () => {
+  const { Commentator, commentaryCount, COMMENTARY } = await import('../js/soul.js');
+  assert.ok(commentaryCount() >= 40, `реплик комментатора: ${commentaryCount()}`);
+  // Все шаблоны непустые
+  for (const [k, pool] of Object.entries(COMMENTARY)) {
+    assert.ok(pool.length >= 2 || k === 'golden', `${k}: слишком мало вариантов`);
+    for (const s of pool) assert.ok(s.trim().length > 8, `${k}: пустая реплика`);
+  }
+  const c = new Commentator({ cooldown: 0 });
+  const seen = new Set();
+  for (let i = 0; i < COMMENTARY.cleanZone.length; i++) {
+    const line = c.say('cleanZone', { n: i });
+    assert.ok(line, 'реплика должна прозвучать при нулевом кулдауне');
+    assert.ok(!seen.has(line), `повтор реплики подряд: ${line}`);
+    seen.add(line);
+  }
+  // Кулдаун глушит слабые триггеры, но не важные
+  const c2 = new Commentator({ cooldown: 5 });
+  assert.ok(c2.say('cleanZone', {}));
+  assert.equal(c2.say('cleanZone', {}), null, 'кулдаун должен глушить слабый триггер');
+  assert.ok(c2.say('fault', {}), 'штраф важнее кулдауна');
+  // Плейсхолдеры подставляются
+  const c3 = new Commentator({ cooldown: 0 });
+  const l = c3.say('ghostAhead', { dog: 'Хлоя', ghost: 'Эйва', t: '0.4' });
+  assert.ok(!l.includes('{'), `плейсхолдер не подставлен: ${l}`);
+  // Реплика живёт ограниченное время
+  c3.update(10);
+  assert.equal(c3.current(), null);
+});
+
+test('idle-автомат меню: выходки чередуются с покоем, 30с бездействия = сон', async () => {
+  const { IdleMachine, SLEEP_AFTER, IDLE_STATES } = await import('../js/soul.js');
+  let s = 1;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const im = new IdleMachine(rnd);
+  const seen = new Set();
+  let idleSec = 0;
+  for (let i = 0; i < 6000; i++) {   // 100 сек по 1/60
+    idleSec += 1 / 60;
+    if (idleSec > SLEEP_AFTER - 1) idleSec = 0; // игрок «шевелится» — не даём заснуть
+    seen.add(im.update(1 / 60, { idleSec }));
+  }
+  assert.ok(seen.has('idle'), 'покой должен встречаться');
+  assert.ok([...seen].some(x => ['scratch', 'yawn', 'tailChase'].includes(x)), 'выходки должны встречаться');
+  assert.ok(!seen.has('sleep'), 'при активности сна быть не должно');
+  for (const st of seen) assert.ok(IDLE_STATES[st], `неизвестное состояние ${st}`);
+  // Бездействие → сон, любой ввод → пробуждение
+  const im2 = new IdleMachine(rnd);
+  assert.equal(im2.update(1 / 60, { idleSec: SLEEP_AFTER + 1 }), 'sleep');
+  assert.equal(im2.update(1 / 60, { idleSec: 0 }), 'idle');
+});
+
+test('темпераменты: у каждой породы своя черта, ноль влияния на баланс', async () => {
+  const { TEMPERAMENTS, temperamentFor } = await import('../js/soul.js');
+  const { BREEDS } = await import('../js/scoring.js');
+  const balanceKeys = ['speedMul', 'windowScale', 'comboRate', 'ability'];
+  for (const id of Object.keys(BREEDS)) {
+    const t = temperamentFor(id);
+    assert.ok(TEMPERAMENTS[id], `нет темперамента для ${id}`);
+    assert.ok(t.trait && t.desc && t.quirk, `${id}: неполный темперамент`);
+    for (const k of balanceKeys) assert.equal(t[k], undefined, `${id}: темперамент трогает баланс (${k})`);
+  }
+  const quirks = Object.values(TEMPERAMENTS).map(t => t.quirk);
+  assert.equal(new Set(quirks).size, quirks.length, 'выходки пород должны быть уникальны');
+});
+
+test('досье: любимый снаряд по доле перфектов, лучшее время только за чистый прогон', async () => {
+  const { favoriteObstacle, recordObstacleStats, recordBestTime, dogName } = await import('../js/soul.js');
+  assert.equal(favoriteObstacle({}), null);
+  assert.equal(favoriteObstacle({ jump: { seen: 2, perfect: 2 } }), null, 'выборка < 3 не считается');
+  const fav = favoriteObstacle({ jump: { seen: 10, perfect: 4 }, weave: { seen: 4, perfect: 4 } });
+  assert.equal(fav.type, 'weave');
+  assert.ok(fav.name && fav.rate === 1);
+  // Накопление статистики из marks прогона
+  const meta = { counters: {}, dogs: {} };
+  recordObstacleStats(meta, [
+    { o: { type: 'jump' }, qte: { result: { grade: 'perfect' } } },
+    { o: { type: 'jump' }, qte: { result: { grade: 'miss' } } },
+    { o: { type: 'weave' }, qte: { result: { grade: 'perfect' } } },
+  ]);
+  assert.deepEqual(meta.counters.obstacleStats.jump, { seen: 2, perfect: 1 });
+  assert.equal(recordBestTime(meta, 'aussie', 30.5, false), false, 'грязный прогон не идёт в рекорд');
+  assert.equal(recordBestTime(meta, 'aussie', 30.5, true), true);
+  assert.equal(recordBestTime(meta, 'aussie', 31.0, true), false);
+  assert.equal(recordBestTime(meta, 'aussie', 29.0, true), true);
+  assert.equal(meta.counters.bestTime.aussie, 29);
+  assert.equal(dogName(meta, { id: 'aussie', name: 'Хлоя' }), 'Хлоя');
+  meta.dogs.aussie = { name: 'Мурзик' };
+  assert.equal(dogName(meta, { id: 'aussie', name: 'Хлоя' }), 'Мурзик');
+});
