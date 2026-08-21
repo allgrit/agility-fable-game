@@ -9,7 +9,7 @@ import { QTE_DEFS, Qte, GROOVE_WINDOWS } from './qte.js';
 import { REAL_COURSES, realToCourse } from './courses.js';
 import { ACHIEVEMENTS, loadAch, hasAch, checkAchievements } from './achievements.js';
 import { pickTheme, THEMES } from './themes.js';
-import { loadMeta, saveMeta, earnFromRun, earnXp, rosettesForLevels, dogState,
+import { loadMeta, saveMeta, earnFromRun, earnXp, addXp, rosettesForLevels, dogState,
   titleFor, xpToNext, streakMult, grantRosette } from './meta.js';
 import { ITEMS, RARITY, SLOT_NAMES, itemById, priceOf, dailyShowcase, applyEquip } from './cosmetics.js';
 import { refreshQuests, applyRunToQuests, claimDone, questDef } from './quests.js';
@@ -365,6 +365,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (app.state === 'podium') { podiumContinue(); return; }
+  if (app.state === 'treat') {
+    if (e.code === 'Escape') closeTreat();
+    else treatAdvance();
+    return;
+  }
   if (app.state === 'news') {
     if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') newsContinue();
     return;
@@ -391,9 +396,14 @@ window.addEventListener('keydown', (e) => {
       localStorage.setItem('agility_onboarded', '1');
       return startRun();
     }
+    // Фото-режим (S3.8) забирает ввод целиком, пока включён
+    if (app.photoMode) { photoModeInput(e.code); return; }
     if (e.code === 'Escape') return toMenu();
     if (e.code === 'KeyR') return startRun();
-    if (e.code === 'KeyP' && app.run.phase === 'countdown') return petDog();
+    if (e.code === 'KeyP') {
+      if (app.run.phase === 'countdown') return petDog();
+      return togglePhotoMode();
+    }
     // Победный круг: любой ввод — сразу к кадру-полароиду
     if (app.run.victoryLap && app.run.skipVictoryLap()) return;
     app.run.input(e.code, true);
@@ -416,6 +426,10 @@ canvas.addEventListener('pointerdown', (e) => {
   if (FS_SUPPORTED) {
     const fz = fsZone();
     if (Math.hypot(p.x - fz.x, p.y - fz.y) < fz.r) { toggleFullscreen(); return; }
+  }
+  if (app.state === 'run' && app.photoMode) {
+    if (!handlePhotoModeTap(p)) app.photoModeDrag = { x: p.x, y: p.y };
+    return;
   }
   if (app.state === 'run') {
     if (app.run?.warmup && app.run.phase === 'finished') {
@@ -456,6 +470,10 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (app.state === 'photo') { handlePhotoTap(p); return; }
   if (app.state === 'podium') { podiumContinue(); return; }
+  if (app.state === 'treat') {
+    if (p.y < canvas.height * 0.12) closeTreat(); else treatAdvance();
+    return;
+  }
   if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
   if (app.state === 'news') { newsContinue(); return; }
   if (app.state === 'champion') { toMenu(); audio.click(); return; }
@@ -546,6 +564,7 @@ canvas.addEventListener('pointerdown', (e) => {
           audio.click();
           if (b.id === 'next') return resultsKey('Enter');
           if (b.id === 'retry') return resultsKey('KeyR');
+          if (b.id === 'treat') return openTreat();
           if (b.id === 'share') return shareResult();
           if (b.id === 'menu') return resultsKey('Escape');
         }
@@ -555,7 +574,19 @@ canvas.addEventListener('pointerdown', (e) => {
     resultsKey('Enter');
   }
 });
+canvas.addEventListener('pointermove', (e) => {
+  // Фото-режим: тянем кадр пальцем/мышью (S3.8)
+  const dg = app.photoModeDrag;
+  if (!dg || !app.photoMode) return;
+  const p = evXY(e);
+  const k = renderer.cam.zoom || 1;
+  renderer.cam.x -= (p.x - dg.x) / k;
+  renderer.cam.y -= (p.y - dg.y) / (k * 0.86);
+  dg.x = p.x; dg.y = p.y;
+});
+
 function releaseTouch(e) {
+  app.photoModeDrag = null;
   const code = touchPointers.get(e.pointerId);
   if (code) {
     touchPointers.delete(e.pointerId);
@@ -621,6 +652,7 @@ function resultsKey(code) {
     return;
   }
   if (code === 'KeyS') return shareResult();
+  if (code === 'KeyT') return openTreat();
   if (code === 'Enter' || code === 'Space') {
     // Подиум-церемония (S3.5): боссовые и турнирные заезды награждают перед выходом
     if (podiumPlace() && !app.podiumDone) { openPodium(); return; }
@@ -759,6 +791,8 @@ function startRun() {
   app.photoDone = false;
   app.podiumDone = false;
   app.podium = null;
+  app.treatDone = false;
+  app.photoMode = null;
   renderer.crowdStanding = false;
   if (app.testDrive) {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
@@ -1485,6 +1519,238 @@ function handleSettingsTap(p) {
     }
   }
   return false;
+}
+
+// ---------- УГОЩЕНИЕ ПОСЛЕ ЗАБЕГА (S3.6) ----------
+// Пятисекундный ритуал в один тап: сидеть → дай лапу → печенька. Полностью
+// необязателен (урок Little Friends: ритуал не должен превращаться в работу).
+const TREAT_STEPS = [
+  { cmd: 'Сидеть!', pose: 'sit', hint: 'Тап / ПРОБЕЛ — команда' },
+  { cmd: 'Дай лапу!', pose: 'paw', hint: 'Тап / ПРОБЕЛ — команда' },
+  { cmd: 'Печенька! 🍪', pose: 'chew', hint: 'Тап / ПРОБЕЛ — угостить' },
+];
+const TREAT_XP = 40;
+
+function openTreat() {
+  if (app.treatDone) return;
+  app.treat = { step: 0, t: 0, done: false, xp: 0 };
+  app.state = 'treat';
+  audio.click();
+}
+
+function treatAdvance() {
+  const tr = app.treat;
+  if (!tr) return;
+  if (tr.done) { closeTreat(); return; }
+  tr.step++;
+  tr.t = 0;
+  audio.good();
+  if (tr.step >= TREAT_STEPS.length) {
+    // Печенька съедена: сердечки, XP-бонус, уровни как обычно
+    tr.done = true;
+    tr.step = TREAT_STEPS.length - 1;
+    const breedId = breedList[app.breedIdx].id;
+    const xp = addXp(meta, breedId, TREAT_XP);
+    tr.xp = TREAT_XP;
+    for (const L of xp.levelsUp) {
+      const tag = titleFor(L);
+      toasts.push({ icon: '🐕', name: `Уровень ${L}!`, desc: tag ? `Новый титул: ${tag}` : 'Собака растёт', t: 0 });
+    }
+    saveMeta(meta);
+    app.treatDone = true;
+    audio.perfect();
+    track('treat', { breed: breedId, xp: TREAT_XP });
+  }
+}
+
+function closeTreat() {
+  app.treat = null;
+  app.state = 'results';
+  audio.click();
+}
+
+function drawTreat(dt) {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const tr = app.treat;
+  if (!tr) { app.state = 'results'; return; }
+  tr.t += dt;
+  const step = TREAT_STEPS[tr.step];
+  const breed = breedList[app.breedIdx];
+  const dressed = applyEquip(breed, dogState(meta, breed.id).equip, meta.owned);
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.94)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(26 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🍪 Угощение', w / 2, h * 0.2);
+  // Команда хендлера крупно
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${Math.round(34 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(tr.done ? 'Кто у нас молодец?' : step.cmd, w / 2, h * 0.3);
+  // Собака выполняет команду
+  ctx.save();
+  ctx.translate(w / 2, h * 0.56);
+  ctx.scale(2.2, 2.2);
+  drawCardDog(ctx, { runPhase: 0, happy: tr.done || step.pose === 'chew',
+    idle: { state: step.pose, k: Math.min(1, tr.t / 0.6) } }, dressed, 52 * z);
+  ctx.restore();
+  // Печенька в кадре на последнем шаге
+  if (step.pose === 'chew' && !tr.done) {
+    ctx.font = `${Math.round(34 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText('🍪', w / 2 + 90 * z, h * 0.5);
+  }
+  if (tr.done) {
+    if (!tr._hearts) { tr._hearts = 1; }
+    ctx.fillStyle = '#9ff0b4';
+    ctx.font = `bold ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(`+${tr.xp} XP · хороший пёс!`, w / 2, h * 0.72);
+    // Сердечки над собакой
+    for (let i = 0; i < 6; i++) {
+      const ph2 = ((app.t * 0.5 + i * 0.17) % 1);
+      ctx.globalAlpha = 0.9 * (1 - ph2);
+      ctx.fillStyle = ['#f06292', '#e91e63', '#ff8a80'][i % 3];
+      ctx.font = `${Math.round((16 + i * 2) * z)}px "Segoe UI", sans-serif`;
+      ctx.fillText('♥', w / 2 + (i - 2.5) * 34 * z, h * 0.44 - ph2 * 60 * z);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(tr.done ? 'Тап / ENTER — к протоколу' : `${step.hint}   ·   ESC — пропустить`,
+    w / 2, h - 34 * z);
+  // Точки прогресса ритуала
+  TREAT_STEPS.forEach((_, i) => {
+    ctx.beginPath();
+    ctx.fillStyle = i < tr.step || tr.done ? '#ffd54a' : i === tr.step ? '#fff' : 'rgba(255,255,255,0.3)';
+    ctx.arc(w / 2 + (i - 1) * 22 * z, h * 0.35, 5 * z, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+// ---------- ФОТО-РЕЖИМ С ПАУЗЫ (S3.8) ----------
+// P во время забега замораживает мир: HUD прячется, кадр двигается и зумится,
+// сверху — рамка с логотипом и кличкой. S сохраняет PNG.
+function togglePhotoMode() {
+  if (!app.run || app.state !== 'run') return;
+  if (app.photoMode) {
+    renderer.cam.x = app.photoMode.baseX;
+    renderer.cam.y = app.photoMode.baseY;
+    renderer.cam.zoom = app.photoMode.baseZoom;
+    app.photoMode = null;
+    audio.click();
+    return;
+  }
+  app.photoMode = { baseX: renderer.cam.x, baseY: renderer.cam.y, baseZoom: renderer.cam.zoom, zoom: 1 };
+  audio.click();
+  track('photo_mode', { mode: app.mode, phase: app.run.phase });
+}
+
+function photoModeInput(code) {
+  const pm = app.photoMode;
+  if (!pm) return false;
+  const step = 1.2 / (pm.zoom || 1);
+  if (code === 'ArrowLeft') renderer.cam.x -= step;
+  else if (code === 'ArrowRight') renderer.cam.x += step;
+  else if (code === 'ArrowUp') renderer.cam.y -= step;
+  else if (code === 'ArrowDown') renderer.cam.y += step;
+  else if (code === 'Equal' || code === 'NumpadAdd') { pm.zoom = Math.min(2.5, pm.zoom * 1.12); renderer.cam.zoom = pm.baseZoom * pm.zoom; }
+  else if (code === 'Minus' || code === 'NumpadSubtract') { pm.zoom = Math.max(0.5, pm.zoom / 1.12); renderer.cam.zoom = pm.baseZoom * pm.zoom; }
+  else if (code === 'KeyS') savePhotoShot();
+  else if (code === 'Escape' || code === 'KeyP') togglePhotoMode();
+  else return false;
+  return true;
+}
+
+function photoModeButtons() {
+  const w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const bw = 120 * z, bh = 44 * z, gap = 10 * z;
+  const y = h - 74 * z;
+  return [
+    { id: 'zoomOut', label: '−', x: w / 2 - bw * 1.5 - gap * 1.5, y, w: bw * 0.6, h: bh },
+    { id: 'zoomIn', label: '+', x: w / 2 - bw * 0.9 - gap * 0.5, y, w: bw * 0.6, h: bh },
+    { id: 'save', label: '💾 PNG', x: w / 2 - bw * 0.3 + gap * 0.5, y, w: bw, h: bh },
+    { id: 'exit', label: '✕ Выход', x: w / 2 + bw * 0.7 + gap * 1.5, y, w: bw, h: bh },
+  ];
+}
+
+function drawPhotoMode() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const breed = breedList[app.breedIdx];
+  ctx.save();
+  // Рамка кадра: широкие поля по краям
+  const pad = 18 * z;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 3 * z;
+  ctx.strokeRect(pad, pad, w - pad * 2, h - pad * 2);
+  // Уголки-визир
+  ctx.lineWidth = 5 * z;
+  const cl = 34 * z;
+  for (const [cx2, cy2, sx2, sy2] of [[pad, pad, 1, 1], [w - pad, pad, -1, 1],
+    [pad, h - pad, 1, -1], [w - pad, h - pad, -1, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(cx2 + sx2 * cl, cy2); ctx.lineTo(cx2, cy2); ctx.lineTo(cx2, cy2 + sy2 * cl);
+    ctx.stroke();
+  }
+  // Подпись: логотип и кличка
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.font = `900 ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🐕 Agility Trial!', pad + 16 * z, h - pad - 16 * z);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#ffd54a';
+  ctx.fillText(dogName(meta, breed), w - pad - 16 * z, h - pad - 16 * z);
+  // Подсказки управления и кнопки
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(IS_TOUCH ? '📸 Фото-режим · тяни кадр пальцем'
+    : '📸 Фото-режим · стрелки — кадр · +/− зум · S — сохранить PNG · P/ESC — выход', w / 2, pad + 30 * z);
+  app.photoModeBtns = photoModeButtons();
+  for (const b of app.photoModeBtns) {
+    ctx.fillStyle = b.id === 'save' ? 'rgba(255,213,74,0.92)' : 'rgba(12,22,18,0.9)';
+    ctx.strokeStyle = b.id === 'save' ? '#ffd54a' : 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 10 * z); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = b.id === 'save' ? '#1a1a1a' : '#fff';
+    ctx.font = `bold ${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.restore();
+}
+
+function handlePhotoModeTap(p) {
+  for (const b of app.photoModeBtns || []) {
+    if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+      audio.click();
+      if (b.id === 'save') savePhotoShot();
+      else if (b.id === 'exit') togglePhotoMode();
+      else photoModeInput(b.id === 'zoomIn' ? 'Equal' : 'Minus');
+      return true;
+    }
+  }
+  return false;
+}
+
+function savePhotoShot() {
+  const name = dogName(meta, breedList[app.breedIdx]);
+  try {
+    const a = document.createElement('a');
+    a.download = `agility-${name}-${Date.now()}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+    toasts.push({ icon: '📸', name: 'Кадр сохранён', desc: 'PNG скачан', t: 0 });
+  } catch {
+    toasts.push({ icon: '⚠️', name: 'Не вышло сохранить', desc: 'Браузер заблокировал скачивание', t: 0 });
+  }
+  track('photo_mode_save', { mode: app.mode });
+  audio.click();
 }
 
 // ---------- ПОДИУМ-ЦЕРЕМОНИЯ (S3.5) ----------
@@ -2948,6 +3214,15 @@ function drawCardDog(ctx, dog, breed, zoom) {
   } else if (st === 'sleep') {          // спит: осел на землю, дышит
     ctx.translate(0, 3.5);
     ctx.scale(1.06, 0.9 * breath);
+  } else if (st === 'sit') {            // ритуал: садится — зад оседает, перед прямой
+    ctx.rotate(-0.36 * k);
+    ctx.translate(0, 3.2 * k);
+  } else if (st === 'paw') {            // ритуал: сидит и подаёт лапу
+    ctx.rotate(-0.36);
+    ctx.translate(0, 3.2);
+  } else if (st === 'chew') {           // ритуал: сидит и жуёт печеньку
+    ctx.rotate(-0.36);
+    ctx.translate(0, 3.2 + Math.sin(app.t * 18) * 0.4);
   }
   ctx.fillStyle = breed.body;
   ctx.beginPath(); ctx.ellipse(0, 0, 13, 6.5, 0, 0, Math.PI * 2); ctx.fill();
@@ -3060,8 +3335,24 @@ function drawCardDog(ctx, dog, breed, zoom) {
       ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + 4, 5); ctx.stroke();
       continue;
     }
+    if (st === 'sit' || st === 'paw' || st === 'chew') {
+      // Сидит: задние лапы подогнуты, передние прямые; «дай лапу» — правая вперёд
+      // Задние лапы подогнуты под корпус — собака сидит на бедре
+      if (lx < 0) { ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx - 2.5, 5.5); ctx.stroke(); continue; }
+      if (st === 'paw' && ph === Math.PI * 0.9) {
+        ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + 8, -3 + Math.sin(app.t * 8) * 0.8); ctx.stroke();
+        continue;
+      }
+      ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + 1, 10); ctx.stroke();
+      continue;
+    }
     const sw = Math.sin(run + ph) * 0.8;
     ctx.beginPath(); ctx.moveTo(lx, 2); ctx.lineTo(lx + Math.sin(sw) * 7, 10); ctx.stroke();
+  }
+  if (st === 'chew') {
+    const chew = Math.abs(Math.sin(app.t * 14)) * 1.6;
+    ctx.fillStyle = '#2a1a1a';
+    ctx.beginPath(); ctx.ellipse(19.5, -0.6, 2.3, 0.7 + chew, -0.1, 0, Math.PI * 2); ctx.fill();
   }
   if (dog.happy && st !== 'sleep' && st !== 'yawn') {
     ctx.fillStyle = '#e2697d';
@@ -3462,6 +3753,7 @@ function drawResults(run, z) {
       // Тач: настоящие кнопки вместо клавиатурных подсказок
       for (const b of resultsButtons(px, py, pw, ph, z)) {
         ctx.save();
+        ctx.globalAlpha = b.id === 'treat' && app.treatDone ? 0.4 : 1;
         ctx.fillStyle = b.id === 'next' ? 'rgba(255,213,74,0.92)' : 'rgba(20,36,26,0.95)';
         ctx.strokeStyle = b.id === 'next' ? '#ffd54a' : 'rgba(255,255,255,0.5)';
         ctx.lineWidth = 2.5;
@@ -3479,7 +3771,7 @@ function drawResults(run, z) {
       ctx.fillText(`ENTER — ${nextText.toLowerCase()}`, w / 2, py + ph - 64 * z);
       ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.fillText('R — переиграть · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
+      ctx.fillText('R — переиграть · T — угостить 🍪 · S — поделиться · ESC — меню', w / 2, py + ph - 32 * z);
     }
   }
   ctx.restore();
@@ -3489,12 +3781,15 @@ function drawResults(run, z) {
 function resultsButtons(px, py, pw, ph, z) {
   const bw = pw - 48 * z, bh = 52 * z;
   const rowY = py + ph - 62 * z;
-  const smallW = (bw - 16 * z) / 3;
+  // Четыре действия: рестарт, необязательное угощение (S3.6), шеринг, меню
+  const smallW = (bw - 18 * z) / 4;
+  const at = (i) => px + 24 * z + (smallW + 6 * z) * i;
   return [
     { id: 'next', x: px + 24 * z, y: rowY - bh - 12 * z, w: bw, h: bh },
-    { id: 'retry', label: '↺ Ещё раз', x: px + 24 * z, y: rowY, w: smallW, h: 44 * z },
-    { id: 'share', label: '📤 Поделиться', x: px + 24 * z + smallW + 8 * z, y: rowY, w: smallW, h: 44 * z },
-    { id: 'menu', label: '⌂ Меню', x: px + 24 * z + (smallW + 8 * z) * 2, y: rowY, w: smallW, h: 44 * z },
+    { id: 'retry', label: '↺ Ещё раз', x: at(0), y: rowY, w: smallW, h: 44 * z },
+    { id: 'treat', label: '🍪 Угостить', x: at(1), y: rowY, w: smallW, h: 44 * z },
+    { id: 'share', label: '📤 Поделиться', x: at(2), y: rowY, w: smallW, h: 44 * z },
+    { id: 'menu', label: '⌂ Меню', x: at(3), y: rowY, w: smallW, h: 44 * z },
   ];
 }
 
@@ -3533,7 +3828,7 @@ function trackScreen() {
   if (app.state === _prevScreen) return;
   _prevScreen = app.state;
   if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'results', 'champion', 'news',
-    'trainer', 'calib', 'photo', 'podium'].includes(app.state)) {
+    'trainer', 'calib', 'photo', 'podium', 'treat'].includes(app.state)) {
     track('screen_open', { screen: app.state, mode: app.mode });
   }
 }
@@ -3571,12 +3866,16 @@ function frame(now) {
   } else if (app.state === 'podium') {
     drawPodium();
     drawToasts(dt);
+  } else if (app.state === 'treat') {
+    drawTreat(dt);
+    drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);
-    app.run.update(dt);
+    if (!app.photoMode) app.run.update(dt);   // фото-режим замораживает мир
     app.run.draw();
     // Фото-финиш (S3.3): кадр снимаем ДО HUD — на полароиде только сцена
     if (app.run.photoReady && !app.photo) { capturePhoto(); return requestAnimationFrame(frame); }
+    if (app.photoMode) { drawPhotoMode(); drawToasts(dt); return requestAnimationFrame(frame); }
     drawHud(app.run);
     const z = Math.min(canvas.width, canvas.height) / 700;
     if (app.testDrive && TEST_MODE === 's1') drawDemoLegend(app.run, z);
@@ -3636,6 +3935,7 @@ window.__agility = {
   },
   menuIdle,
   openPodium,
+  openTreat, treatAdvance, togglePhotoMode,
   pressKey(code) { app.run?.input(code, true); },
   releaseKey(code) { app.run?.input(code, false); },
 };

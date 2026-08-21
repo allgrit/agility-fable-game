@@ -299,6 +299,11 @@ const SCENES = [
     predicate: 'false',
     criteria: 'Фото-финиш (S3.3): на тёмном фоне заголовок «📸 ФОТО-ФИНИШ» и бумажный ПОЛАРОИД с наклоном — сверху кадр сцены, снизу рукописная подпись «Хлоя · NN.NNс», строка титула и трассы, мелкие «🐕 Agility Trial!» и дата; под карточкой кнопки «📤 Поделиться» и жёлтая «▶ К протоколу».',
   },
+  {
+    name: '45-photo-mode', mode: 'career', cls: 'open', stage: 2, setup: 'photoMode',
+    predicate: "run.dog.airborne && run.dog.elevation > 0.6",
+    criteria: 'Фото-режим с паузы (S3.8): мир заморожен на прыжке, HUD спрятан, кадр обрамлён белой рамкой с уголками-визиром, сверху подсказка «📸 Фото-режим · стрелки — кадр · +/− зум · S — сохранить PNG», внизу слева «🐕 Agility Trial!», справа кличка, по центру кнопки −, +, 💾 PNG, ✕ Выход.',
+  },
 ];
 
 const manifest = [];
@@ -308,6 +313,14 @@ for (const sc of SCENES) {
     predicate: sc.predicate, missAt: sc.missAt, thenFinishT: sc.thenFinishT, equip: sc.equip,
     riskFirst: sc.riskFirst, testDrive: sc.testDrive, lapT: sc.lapT, photo: sc.photo,
   })})`);
+  if (sc.setup === 'photoMode') {
+    // S3.8: включаем фото-режим и слегка приближаем кадр
+    await page.evaluate(`(() => {
+      const A = window.__agility;
+      A.togglePhotoMode();
+      A.app.photoMode.zoom = 1.25;
+    })()`);
+  }
   if (sc.setup === 'mash') {
     // Качаем boost инпутами БЕЗ прокрутки физики (собака остаётся в фазе спурта)
     // и чистим конфетти/попапы последнего перфекта — кадр остаётся читаемым
@@ -444,6 +457,18 @@ const SCREENS = [
       A.openPodium();
     })()`,
     criteria: 'Подиум-церемония (S3.5): «🏅 ЦЕРЕМОНИЯ НАГРАЖДЕНИЯ», строка «Хлоя — ПЕРВОЕ МЕСТО!», три тумбы 2-1-3 (центральная выше и подсвечена жёлтым), на центральной — Хлоя с розеткой на ошейнике, на боковых — серые силуэты соперников; внизу «ENTER / тап — дальше».',
+  },
+  {
+    name: '44-treat',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = null;
+      A.app.breedIdx = 3;
+      A.app.treatDone = false;
+      A.openTreat();
+      A.treatAdvance();          // шаг «Дай лапу!»
+    })()`,
+    criteria: 'Ритуал угощения (S3.6): экран «🍪 Угощение», крупная команда «Дай лапу!», собака СИДИТ и тянет переднюю лапу вперёд, три точки прогресса (первая закрашена), внизу подсказка «Тап / ПРОБЕЛ — команда · ESC — пропустить».',
   },
 ];
 for (const sc of SCREENS) {
