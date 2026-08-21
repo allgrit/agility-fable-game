@@ -92,6 +92,9 @@ export const ITEMS = [
     palette: { body: '#8a4f2c', chest: '#f7f5f0', ear: '#6b3a1e', tan: '#d09a5a', merle: null, eye: '#b8863c' } },
   { id: 'coat-aussie-blackbi', slot: 'coat', breed: 'aussie', name: 'Блэк-би Хлоя', rarity: 'common',
     palette: { body: '#26262c', chest: '#f7f5f0', ear: '#17171c', tan: null, merle: null, eye: '#8fd8ff' } },
+  // Розетка чемпиона (S3.5): выдаётся за золото подиума, дальше живёт как косметика
+  { id: 'neck-rosette-champion', slot: 'neck', name: 'Розетка чемпиона', rarity: 'legendary',
+    neck: { kind: 'rosette', color: '#ffd54a' } },
   { id: 'coat-aussie-redbi', slot: 'coat', breed: 'aussie', name: 'Ред-би Хлоя', rarity: 'common',
     palette: { body: '#7a4a30', chest: '#f7f5f0', ear: '#5d3722', tan: null, merle: null, eye: '#b8863c' } },
 ];

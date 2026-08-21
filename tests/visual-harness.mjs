@@ -431,6 +431,20 @@ const SCREENS = [
     })()`,
     criteria: 'Досье собаки (S3.7): панель «📖 Досье собаки» — слева живой портрет Хлои, справа кличка с кнопкой «✏ переименовать» и строкой породы/уровня, ниже строки-пилюли: Характер «Задира», Повадка, Любимый снаряд «слалом (89% идеальных)», Лучшее чистое время 28.44с, розетки, золото. Ничего не наезжает.',
   },
+  {
+    name: '43-podium',
+    setup: `(() => {
+      const A = window.__agility;
+      A.app.run = { warmup: false, bossCls: 'novice', eliminated: false, time: 30.1,
+        ghost: { name: 'Эйва', time: 33.0 }, course: { name: 'Босс: Эйва' } };
+      A.app.result = { qualified: true, clean: true, stars: 3 };
+      A.app.breedIdx = 3;
+      A.app.podiumDone = false;
+      A.app.state = 'results';
+      A.openPodium();
+    })()`,
+    criteria: 'Подиум-церемония (S3.5): «🏅 ЦЕРЕМОНИЯ НАГРАЖДЕНИЯ», строка «Хлоя — ПЕРВОЕ МЕСТО!», три тумбы 2-1-3 (центральная выше и подсвечена жёлтым), на центральной — Хлоя с розеткой на ошейнике, на боковых — серые силуэты соперников; внизу «ENTER / тап — дальше».',
+  },
 ];
 for (const sc of SCREENS) {
   await page.evaluate(sc.setup);

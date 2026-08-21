@@ -364,6 +364,7 @@ window.addEventListener('keydown', (e) => {
     photoContinue();
     return;
   }
+  if (app.state === 'podium') { podiumContinue(); return; }
   if (app.state === 'news') {
     if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') newsContinue();
     return;
@@ -454,6 +455,7 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (app.state === 'photo') { handlePhotoTap(p); return; }
+  if (app.state === 'podium') { podiumContinue(); return; }
   if (app.state === 'board' || app.state === 'quests') { app.state = 'menu'; audio.click(); return; }
   if (app.state === 'news') { newsContinue(); return; }
   if (app.state === 'champion') { toMenu(); audio.click(); return; }
@@ -620,6 +622,8 @@ function resultsKey(code) {
   }
   if (code === 'KeyS') return shareResult();
   if (code === 'Enter' || code === 'Space') {
+    // Подиум-церемония (S3.5): боссовые и турнирные заезды награждают перед выходом
+    if (podiumPlace() && !app.podiumDone) { openPodium(); return; }
     // Тест-драйв: без прогрессии — просто ещё заход
     if (app.testDrive) return startRun();
     // Победа над боссом: сначала газетная вырезка, потом переход
@@ -753,6 +757,8 @@ function startRun() {
   app.bossWin = null;
   app.photo = null;          // кадр-полароид прошлого чистого прогона
   app.photoDone = false;
+  app.podiumDone = false;
+  app.podium = null;
   renderer.crowdStanding = false;
   if (app.testDrive) {
     // Для полноты картины — призрак-соперница Эйва (мраморная аусси)
@@ -1479,6 +1485,139 @@ function handleSettingsTap(p) {
     }
   }
   return false;
+}
+
+// ---------- ПОДИУМ-ЦЕРЕМОНИЯ (S3.5) ----------
+// Награждают только там, где есть соперники: дуэли с боссом и турнирные трассы
+// чемпионата мира. Место: 1 — победа над призраком/чистый прогон, 2 — квалификация,
+// 3 — всё остальное. Розетка за золото вешается на ошейник и остаётся косметикой.
+const PODIUM_ROSETTE = 'neck-rosette-champion';
+
+function podiumPlace() {
+  const run = app.run, res = app.result;
+  if (!run || !res || run.warmup || app.testDrive) return 0;
+  const isDuel = !!run.bossCls, isCup = app.mode === 'worldcup';
+  if (!isDuel && !isCup) return 0;
+  if (run.eliminated) return 3;
+  if (isDuel) {
+    if (res.qualified && run.ghost && run.time < run.ghost.time) return 1;
+    return res.qualified ? 2 : 3;
+  }
+  if (res.clean) return 1;
+  return res.qualified ? 2 : 3;
+}
+
+function openPodium() {
+  const place = podiumPlace();
+  const breed = breedList[app.breedIdx];
+  app.podium = { place, t: 0, name: dogName(meta, breed), rosette: false };
+  // Золото турнира — розетка на ошейник, выдаётся один раз
+  if (place === 1 && !meta.owned[PODIUM_ROSETTE]) {
+    meta.owned[PODIUM_ROSETTE] = 1;
+    const eq = dogState(meta, breed.id).equip;
+    if (!eq.neck) eq.neck = PODIUM_ROSETTE;   // сразу надеваем, если шея свободна
+    saveMeta(meta);
+    app.podium.rosette = true;
+    toasts.push({ icon: '🏵️', name: 'Розетка чемпиона!', desc: 'Надета на ошейник — теперь косметика', t: 0 });
+  }
+  app.state = 'podium';
+  audio.fanfare();
+  track('podium', { place, mode: app.mode, cls: app.cls, rosette: app.podium.rosette });
+}
+
+function podiumContinue() {
+  app.podiumDone = true;
+  app.state = 'results';
+  audio.click();
+  resultsKey('Enter');
+}
+
+function drawPodium() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const pd = app.podium;
+  if (!pd) { app.state = 'results'; return; }
+  pd.t += 1 / 60;
+  const breed = breedList[app.breedIdx];
+  const eq0 = dogState(meta, breed.id).equip;
+  // На церемонии розетка чемпиона всегда на виду — ради неё всё и затевалось
+  const dressed = applyEquip(breed,
+    pd.place === 1 && meta.owned[PODIUM_ROSETTE] ? { ...eq0, neck: PODIUM_ROSETTE } : eq0,
+    meta.owned);
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.96)';
+  ctx.fillRect(0, 0, w, h);
+  // Лучи прожекторов над подиумом
+  ctx.save();
+  ctx.translate(w / 2, h * 0.18);
+  for (let i = 0; i < 7; i++) {
+    ctx.save();
+    ctx.rotate((i / 7 - 0.5) * 1.1 + Math.sin(app.t * 0.4) * 0.05);
+    ctx.fillStyle = 'rgba(255,213,74,0.05)';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-40 * z, h); ctx.lineTo(40 * z, h); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(28 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🏅 ЦЕРЕМОНИЯ НАГРАЖДЕНИЯ', w / 2, h * 0.16);
+
+  // Тумбы 1-2-3: центр выше, по бокам ниже
+  const baseY = h * 0.74;
+  const boxW = Math.min(150 * z, w * 0.22);
+  const slots = [
+    { place: 2, x: w / 2 - boxW * 1.08, hgt: 78 * z, color: '#b8c2cc' },
+    { place: 1, x: w / 2,               hgt: 118 * z, color: '#ffd54a' },
+    { place: 3, x: w / 2 + boxW * 1.08, hgt: 54 * z, color: '#cd8b56' },
+  ];
+  for (const sl of slots) {
+    const mine = sl.place === pd.place;
+    // Подъём тумбы с пружиной при появлении
+    const k = Math.min(1, pd.t / 0.5);
+    const hh = sl.hgt * k;
+    ctx.fillStyle = mine ? 'rgba(255,213,74,0.22)' : 'rgba(255,255,255,0.09)';
+    ctx.strokeStyle = mine ? '#ffd54a' : 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = mine ? 3 : 1.5;
+    ctx.beginPath(); ctx.roundRect(sl.x - boxW / 2, baseY - hh, boxW, hh, 6 * z);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = mine ? '#ffd54a' : 'rgba(255,255,255,0.6)';
+    ctx.font = `900 ${Math.round(30 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillText(String(sl.place), sl.x, baseY - hh / 2 + 10 * z);
+    // Собаки на тумбах: наша с эмоцией по месту, соперники — серые силуэты
+    ctx.save();
+    if (mine) {
+      // Эмоция: золото — радость и виляние хвостом, серебро/бронза — потухший вид
+      const happy = pd.place === 1;
+      ctx.translate(sl.x, baseY - hh - 26 * z);
+      ctx.scale(1.25, 1.25);
+      drawCardDog(ctx, { runPhase: happy ? app.t * 5 : 0, happy,
+        idle: happy ? null : { state: 'sleep', k: 0.5 } }, dressed, 46 * z);
+    } else {
+      ctx.translate(sl.x, baseY - hh - 21 * z);
+      ctx.globalAlpha = 0.35;
+      drawCardDog(ctx, { runPhase: 0, happy: false, idle: null },
+        { ...BREEDS.border, body: '#5c6670', chest: '#8a949e', ear: '#454e57' }, 40 * z);
+    }
+    ctx.restore();
+  }
+  // Хендлер на коленях у центральной тумбы — обнимает собаку
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  const placeWord = { 1: 'ПЕРВОЕ МЕСТО!', 2: 'Второе место', 3: 'Третье место' }[pd.place];
+  ctx.fillText(`${pd.name} — ${placeWord}`, w / 2, h * 0.245);
+  ctx.fillStyle = pd.place === 1 ? '#9ff0b4' : 'rgba(255,255,255,0.8)';
+  ctx.font = `italic ${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  const line = pd.place === 1
+    ? (pd.rosette ? 'Розетка отправляется на ошейник — она останется с тобой навсегда.'
+      : 'Розетка уже в гардеробе — сегодня просто аплодисменты.')
+    : 'Судьи жмут лапу. Следующий раз — выше.';
+  ctx.fillText(line, w / 2, h * 0.29);
+  ctx.fillStyle = Math.sin(app.t * 4) > -0.3 ? '#ffd54a' : 'rgba(255,213,74,0.4)';
+  ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('ENTER / тап — дальше', w / 2, h - 30 * z);
+  ctx.restore();
 }
 
 // ---------- ФОТО-ФИНИШ: ПОЛАРОИД (S3.3) ----------
@@ -2823,6 +2962,35 @@ function drawCardDog(ctx, dog, breed, zoom) {
   }
   ctx.fillStyle = breed.chest;
   ctx.beginPath(); ctx.ellipse(6, 1.5, 4.5, 4.2, 0, 0, Math.PI * 2); ctx.fill();
+  // Экипировка шеи видна и вне забега: бандана, ошейник, розетка подиума (S3.5)
+  if (breed.neckItem) {
+    const ni = breed.neckItem;
+    const col = ni.color === 'rainbow' ? `hsl(${(app.t * 90) % 360}, 85%, 60%)` : ni.color;
+    if (ni.kind === 'bandana') {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(8, -5); ctx.lineTo(11, 3); ctx.lineTo(4, 5); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.strokeStyle = ni.kind === 'rosette' ? '#7a5230' : col;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath(); ctx.ellipse(9.5, -2, 4.6, 3.4, -0.2, 0.4, Math.PI * 1.4); ctx.stroke();
+      if (ni.kind === 'rosette') {
+        ctx.fillStyle = col;
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.ellipse(9.5 + Math.cos(a) * 1.7, 0.6 + Math.sin(a) * 1.7, 1.5, 1.0, a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#fff8dc';
+        ctx.beginPath(); ctx.arc(9.5, 0.6, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+        for (const off of [-1.0, 1.0]) {
+          ctx.beginPath(); ctx.moveTo(9.5 + off * 0.6, 1.8); ctx.lineTo(9.5 + off * 1.6, 5.6); ctx.stroke();
+        }
+      }
+    }
+  }
   if (breed.curly) {
     ctx.fillStyle = breed.curly;
     for (const [px2, py2, pr] of [[-11, -4, 3], [-6, -6.2, 3.2], [0, -6.8, 3.4], [6, -6, 3], [11, -4, 2.7], [-3, 6, 3]]) {
@@ -3365,7 +3533,7 @@ function trackScreen() {
   if (app.state === _prevScreen) return;
   _prevScreen = app.state;
   if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'results', 'champion', 'news',
-    'trainer', 'calib', 'photo'].includes(app.state)) {
+    'trainer', 'calib', 'photo', 'podium'].includes(app.state)) {
     track('screen_open', { screen: app.state, mode: app.mode });
   }
 }
@@ -3399,6 +3567,9 @@ function frame(now) {
     drawToasts(dt);
   } else if (app.state === 'photo') {
     drawPhoto();
+    drawToasts(dt);
+  } else if (app.state === 'podium') {
+    drawPodium();
     drawToasts(dt);
   } else if (app.run) {
     renderer.begin(dt);
@@ -3464,6 +3635,7 @@ window.__agility = {
     app.photoDone = true;
   },
   menuIdle,
+  openPodium,
   pressKey(code) { app.run?.input(code, true); },
   releaseKey(code) { app.run?.input(code, false); },
 };

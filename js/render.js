@@ -545,7 +545,30 @@ export class Renderer {
     if (breed.neckItem) {
       const ni = breed.neckItem;
       const col = ni.color === 'rainbow' ? `hsl(${(this.time * 90) % 360}, 85%, 60%)` : ni.color;
-      if (ni.kind === 'bandana') {
+      if (ni.kind === 'rosette') {
+        // Розетка подиума: лепестковый круг с двумя лентами вниз
+        const rx = 9.5 * stretch, ry = -1.5;
+        ctx.strokeStyle = '#7a5230'; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(rx, ry, 4.6, 3.4, -0.2, 0.4, Math.PI * 1.4);
+        ctx.stroke();
+        ctx.fillStyle = col;
+        for (let i = 0; i < 8; i++) {   // лепестки
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.ellipse(rx + Math.cos(a) * 1.7, ry + 2.4 + Math.sin(a) * 1.7, 1.5, 1.0, a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#fff8dc';
+        ctx.beginPath(); ctx.arc(rx, ry + 2.4, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+        for (const off of [-1.0, 1.0]) {
+          ctx.beginPath();
+          ctx.moveTo(rx + off * 0.6, ry + 3.6);
+          ctx.lineTo(rx + off * 1.6, ry + 7.4);
+          ctx.stroke();
+        }
+      } else if (ni.kind === 'bandana') {
         ctx.fillStyle = col;
         ctx.beginPath();
         ctx.moveTo(8 * stretch, -5);
