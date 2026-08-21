@@ -18,6 +18,9 @@ import { setHapticsEnabled } from './haptics.js';
 import { dogName, temperamentFor, favoriteObstacle, recordObstacleStats, recordBestTime,
   IdleMachine, OBSTACLE_NAMES } from './soul.js';
 import { updateCalibration } from './calibrate.js';
+// S4.10 «Питомник» — витрина целей; S4.11 — календарь-архив трасс дня.
+import { collectGoals, nearestGoals, groupGoals, goalsSummary } from './goals.js';
+import { buildCalendar, currentCursor, prevMonth, nextMonth } from './daily-archive.js';
 // Fable Arcade SDK: аналитика игроков + онлайн-лидерборд (общий бэкенд по game-id).
 import { SDK } from '../sdk/config.js';
 import { track, telemetryEnabled } from '../sdk/analytics.js';
@@ -141,7 +144,9 @@ function dailyModifier() {
   return ['none', 'rain', 'dusk', 'strict'][Math.floor(todayNum() / 3) % 4];
 }
 function activeModifier() {
-  return app.mode === 'daily' ? dailyModifier() : 'none';
+  if (app.mode !== 'daily') return 'none';
+  // Перебег из архива (S4.11) несёт модификатор СВОЕГО дня, а не сегодняшнего.
+  return app.archiveDay ? app.archiveDay.modifier : dailyModifier();
 }
 
 // ---------- ТРАССА ДНЯ ----------
@@ -176,7 +181,7 @@ function loadMedals() {
   catch { return {}; }
 }
 function courseKey() {
-  if (app.mode === 'daily') return `d:${todayStr()}`;
+  if (app.mode === 'daily') return `d:${app.archiveDay ? app.archiveDay.key : todayStr()}`;
   if (app.mode === 'worldcup') return `w:${app.realIdx % REAL_COURSES.length}`;
   return `c:${app.cls}:${app.stage}`;
 }
@@ -311,6 +316,16 @@ function dossierZone() {
   const z = Math.min(canvas.width, canvas.height) / 700;
   return { x: canvas.width - 34 * z, y: 520 * z, r: 26 * z };
 }
+// S4.10: витрина целей «Питомник» — всё, ради чего играть дальше
+function kennelZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 585 * z, r: 26 * z };
+}
+// S4.11: календарь-архив трасс дня
+function archiveZone() {
+  const z = Math.min(canvas.width, canvas.height) / 700;
+  return { x: canvas.width - 34 * z, y: 650 * z, r: 26 * z };
+}
 
 // Полноэкранный режим (недоступен на iPhone — там прячем кнопку).
 const FS_SUPPORTED = !!(document.documentElement.requestFullscreen);
@@ -352,6 +367,33 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyO' && app.state !== 'run') {
     app.state = app.state === 'settings' ? 'menu' : 'settings';
     audio.click();
+    return;
+  }
+  // S4.10 «Питомник» (K) и S4.11 «Архив трасс дня» (A)
+  if (e.code === 'KeyK' && app.state !== 'run') {
+    if (app.state === 'kennel') app.state = 'menu';
+    else { openKennel(); }
+    audio.click();
+    return;
+  }
+  if (e.code === 'KeyA' && app.state !== 'run') {
+    if (app.state === 'archive') app.state = 'menu';
+    else openArchive();
+    audio.click();
+    return;
+  }
+  if (app.state === 'kennel') {
+    if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); return; }
+    if (e.code === 'ArrowUp') return kennelScrollBy(-60 * kennelLayout().z);
+    if (e.code === 'ArrowDown') return kennelScrollBy(60 * kennelLayout().z);
+    if (e.code === 'PageUp') return kennelScrollBy(-kennelLayout().viewH * 0.9);
+    if (e.code === 'PageDown') return kennelScrollBy(kennelLayout().viewH * 0.9);
+    return;
+  }
+  if (app.state === 'archive') {
+    if (e.code === 'Escape' || e.code === 'Enter') { app.state = 'menu'; audio.click(); return; }
+    if (e.code === 'ArrowLeft') return archiveStep(-1);
+    if (e.code === 'ArrowRight') return archiveStep(1);
     return;
   }
   if (app.state === 'board' || app.state === 'shop' || app.state === 'quests'
@@ -509,6 +551,19 @@ canvas.addEventListener('pointerdown', (e) => {
     if (!handleDossierTap(p)) { app.state = 'menu'; audio.click(); }
     return;
   }
+  // Питомник: палец либо тянет список, либо (если не потянул) закрывает экран
+  if (app.state === 'kennel') {
+    const L = kennelLayout();
+    app.kennelDrag = {
+      y0: p.y, y: p.y, scroll0: app.kennelScroll || 0, moved: 0,
+      inside: p.x >= L.px && p.x <= L.px + L.pw && p.y >= L.py && p.y <= L.py + L.ph,
+    };
+    return;
+  }
+  if (app.state === 'archive') {
+    if (!handleArchiveTap(p)) { app.state = 'menu'; audio.click(); }
+    return;
+  }
   const tz = trophyZone();
   if (app.state === 'menu' && Math.hypot(p.x - tz.x, p.y - tz.y) < tz.r) {
     app.state = 'board'; audio.click(); return;
@@ -528,6 +583,14 @@ canvas.addEventListener('pointerdown', (e) => {
   const dsz = dossierZone();
   if (app.state === 'menu' && Math.hypot(p.x - dsz.x, p.y - dsz.y) < dsz.r) {
     app.state = 'dossier'; audio.click(); return;
+  }
+  const kez = kennelZone();
+  if (app.state === 'menu' && Math.hypot(p.x - kez.x, p.y - kez.y) < kez.r) {
+    openKennel(); audio.click(); return;
+  }
+  const arz = archiveZone();
+  if (app.state === 'menu' && Math.hypot(p.x - arz.x, p.y - arz.y) < arz.r) {
+    openArchive(); audio.click(); return;
   }
   const inZone = (zz) => zz && p.x >= zz.x && p.x <= zz.x + zz.w && p.y >= zz.y && p.y <= zz.y + zz.h;
   // Дуэль-реванш с пропущенным боссом (строка «Дуэли» на карте карьеры)
@@ -554,10 +617,9 @@ canvas.addEventListener('pointerdown', (e) => {
     if (app.run && app.run.finishT < 3.4) { app.run.finishT = 3.4; audio.click(); return; }
     if (inZone(app.chloeZoneResults)) return openChloe();
     if (IS_TOUCH) {
-      const w2 = canvas.width, h2 = canvas.height;
-      const z2 = Math.min(w2, h2) / 700;
-      const pw2 = Math.min(520 * z2, w2 * 0.9), ph2 = Math.min(570 * z2, h2 * 0.88);
-      const px2 = w2 / 2 - pw2 / 2, py2 = h2 / 2 - ph2 / 2;
+      // Геометрия панели берётся из общего resultsPanel(): раньше здесь жила
+      // своя (устаревшая) формула высоты, и хит-зоны уезжали от нарисованных кнопок.
+      const { px: px2, py: py2, pw: pw2, ph: ph2, z: z2 } = resultsPanel();
       const pad = 8 * z2; // запас хит-зоны под палец
       for (const b of resultsButtons(px2, py2, pw2, ph2, z2)) {
         if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) {
@@ -575,6 +637,16 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  // Питомник: вертикальный свайп по списку целей (S4.10)
+  if (app.state === 'kennel' && app.kennelDrag) {
+    const kp = evXY(e);
+    const dg2 = app.kennelDrag;
+    dg2.moved = Math.max(dg2.moved, Math.abs(kp.y - dg2.y0));
+    app.kennelScroll = dg2.scroll0 - (kp.y - dg2.y0);
+    clampKennelScroll();
+    dg2.y = kp.y;
+    return;
+  }
   // Фото-режим: тянем кадр пальцем/мышью (S3.8)
   const dg = app.photoModeDrag;
   if (!dg || !app.photoMode) return;
@@ -587,6 +659,14 @@ canvas.addEventListener('pointermove', (e) => {
 
 function releaseTouch(e) {
   app.photoModeDrag = null;
+  // Питомник: палец отпущен без протяжки — это был тап. Тап мимо панели закрывает.
+  if (app.state === 'kennel' && app.kennelDrag) {
+    const dg = app.kennelDrag;
+    app.kennelDrag = null;
+    const z = Math.min(canvas.width, canvas.height) / 700;
+    if (dg.moved < 6 * z && !dg.inside) { app.state = 'menu'; audio.click(); }
+    return;
+  }
   const code = touchPointers.get(e.pointerId);
   if (code) {
     touchPointers.delete(e.pointerId);
@@ -595,6 +675,12 @@ function releaseTouch(e) {
 }
 canvas.addEventListener('pointerup', releaseTouch);
 canvas.addEventListener('pointercancel', releaseTouch);
+// Колесо мыши — прокрутка витрины целей (десктоп)
+canvas.addEventListener('wheel', (e) => {
+  if (app.state !== 'kennel') return;
+  e.preventDefault();
+  kennelScrollBy(e.deltaY * (e.deltaMode === 1 ? 16 : 1));
+}, { passive: false });
 
 function menuKey(code) {
   if (code === 'ArrowLeft') { app.breedIdx = (app.breedIdx + breedList.length - 1) % breedList.length; audio.click(); menuIdle.set('shake'); }
@@ -719,7 +805,15 @@ function petDog() {
   if (first) track('pet', { mode: app.mode, cls: app.cls, breed: breedList[app.breedIdx].id });
 }
 
-function toMenu() { app.state = 'menu'; app.run = null; app.bossChallenge = null; audio.crowdLevel(0); }
+function toMenu() {
+  app.state = 'menu';
+  app.run = null;
+  app.bossChallenge = null;
+  // Перебег из архива живёт ровно до выхода в меню: следующий «Старт» в режиме
+  // «трасса дня» снова даёт сегодняшнюю трассу, а не последнюю открытую из календаря.
+  app.archiveDay = null;
+  audio.crowdLevel(0);
+}
 
 function startRun() {
   const breed = breedList[app.breedIdx];
@@ -742,8 +836,10 @@ function startRun() {
   if (app.mode === 'worldcup' && REAL_COURSES.length) {
     course = realToCourse(REAL_COURSES[app.realIdx % REAL_COURSES.length]);
   } else if (app.mode === 'daily') {
-    course = generateCourse(todayNum() * 13 + 7, dailyCls());
-    course.name = `Трасса дня ${todayStr()}`;
+    // Календарь-архив (S4.11) подкладывает параметры выбранного дня; без него — сегодня.
+    const ad = app.archiveDay;
+    course = generateCourse(ad ? ad.seed : todayNum() * 13 + 7, ad ? ad.cls : dailyCls());
+    course.name = `Трасса дня ${ad ? ad.key : todayStr()}`;
   } else if (app.testDrive && TEST_MODE === 's1') {
     // Демо S1 «Game Feel» (?test=s1): короткая трасса, заточенная под новинки —
     // прыжки (hitstop/squash/микро-дельта/анти-спам обманок), groove-слалом
@@ -786,6 +882,9 @@ function startRun() {
     // S3: комментатору нужны кличка и личный рекорд трассы («темп рекорда ринга»)
     dogName: dogName(meta, breed),
     bestTime: (meta.counters.courseBest || {})[courseKey()] || null });
+  // Перебег прошедшего дня — вне зачёта: очки/медаль/онлайн-топ не начисляются.
+  // Флаг живёт на run, поэтому переживает переход run → results.
+  app.run.unscored = !!(app.archiveDay && app.archiveDay.scored === false);
   app.bossWin = null;
   app.photo = null;          // кадр-полароид прошлого чистого прогона
   app.photoDone = false;
@@ -1036,6 +1135,10 @@ function drawHud(run) {
     ctx.fillText(modName, w / 2, (isPortrait() ? 140 : 44) * z + hudShiftY);
   }
   ctx.restore();
+
+  // Перебег из архива (S4.11): честная плашка — результат никуда не идёт.
+  // Ниже строки комментатора (72z/168z), иначе они дерутся за одно место.
+  if (run.unscored) drawUnscoredBadge(ctx, w / 2, (isPortrait() ? 198 : 102) * z + hudShiftY, z);
 
   // Радио-строка комментатора (S3): трансляция ринга по триггерам забега
   drawCommentary(run, z);
@@ -2245,6 +2348,364 @@ function handleDossierTap(p) {
   return false;
 }
 
+// ---------- ПИТОМНИК: ВИТРИНА ЦЕЛЕЙ (S4.10) ----------
+// Vampire Survivors: игрок в любой момент видит «во что играть дальше». Здесь
+// это единый прокручиваемый список — ачивки, косметика, боссы, задания, уровни,
+// медальные наборы — с прогресс-барами. Выполненные остаются в списке: это
+// витрина коллекции, а не todo, из которого вещи исчезают.
+
+// Целей около сотни, а собираются они из пяти модулей — пересчитывать каждый
+// кадр расточительно. Кэш живёт полсекунды: экран остаётся живым, но не жжёт CPU.
+function currentGoals() {
+  if (!app._goals || app.t - (app._goalsT ?? -9) > 0.5) {
+    app._goals = collectGoals({ meta, ach: loadAch(), medals: loadMedals() });
+    app._goalsT = app.t;
+  }
+  return app._goals;
+}
+function kennelBadge() {
+  const s = goalsSummary(currentGoals());
+  return s.total ? `${s.done}/${s.total}` : null;
+}
+function openKennel() {
+  app._goals = null;              // после забега список обязан быть свежим
+  app.kennelScroll = app.kennelScroll || 0;
+  app.state = 'kennel';
+  clampKennelScroll();
+}
+
+function kennelLayout() {
+  const w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const pw = Math.min(620 * z, w * 0.94);
+  // Список длинный — в портрете забираем высоту экрана, а не квадрат по ширине.
+  const ph = Math.min(h * 0.92, Math.max(600 * z, h * 0.72));
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  const viewTop = py + 86 * z;
+  return { w, h, z, pw, ph, px, py, viewTop, viewH: ph - 124 * z,
+    rowH: 42 * z, secH: 30 * z };
+}
+function kennelContentH(L, groups) {
+  let sum = 0;
+  for (const g of groups) sum += L.secH + g.goals.length * L.rowH;
+  return sum;
+}
+function clampKennelScroll() {
+  const L = kennelLayout();
+  const max = Math.max(0, kennelContentH(L, groupGoals(currentGoals())) - L.viewH);
+  app.kennelScroll = Math.max(0, Math.min(max, app.kennelScroll || 0));
+}
+function kennelScrollBy(dy) {
+  app.kennelScroll = (app.kennelScroll || 0) + dy;
+  clampKennelScroll();
+}
+
+// Обрезка строки по ширине с многоточием (шрифт должен быть выставлен заранее).
+function fitText(ctx, s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  let cut = s;
+  while (cut.length > 2 && ctx.measureText(cut + '…').width > maxW) cut = cut.slice(0, -1);
+  return cut + '…';
+}
+const fmtNum = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+// Непрозрачная карточка (как у протокола судьи): плотный список нельзя читать
+// сквозь меню — полупрозрачный panel() под ним превращается в кашу.
+function solidPanel(ctx, x, y, w, h, z) {
+  ctx.fillStyle = 'rgba(14,26,20,0.97)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 16 * z); ctx.fill(); ctx.stroke();
+}
+
+function drawGoalRow(ctx, g, x, y, w, hh, z) {
+  ctx.save();
+  ctx.globalAlpha = g.done ? 0.55 : 1;
+  ctx.fillStyle = g.done ? 'rgba(105,240,174,0.08)' : 'rgba(255,255,255,0.05)';
+  ctx.beginPath(); ctx.roundRect(x, y + 2 * z, w, hh - 6 * z, 8 * z); ctx.fill();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.font = `${Math.round(16 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText(g.icon, x + 10 * z, y + hh * 0.42);
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = g.done ? '#9ff0b4' : '#fff';
+  ctx.fillText(fitText(ctx, (g.done ? '✓ ' : '') + g.name, w * 0.52), x + 34 * z, y + hh * 0.36);
+  ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText(fitText(ctx, g.hint, w * 0.58), x + 34 * z, y + hh * 0.7);
+  // Правая колонка: у счётной цели — бар и current/target, у бинарной — галочка/замок.
+  const cw = w * 0.28, cx = x + w - cw - 12 * z;
+  ctx.textAlign = 'right';
+  if (g.target) {
+    ctx.font = `bold ${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = g.done ? '#9ff0b4' : '#e8f5ec';
+    ctx.fillText(`${fmtNum(g.current)}/${fmtNum(g.target)}`, x + w - 12 * z, y + hh * 0.34);
+    const by = y + hh * 0.62;
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.beginPath(); ctx.roundRect(cx, by, cw, 5 * z, 2.5 * z); ctx.fill();
+    ctx.fillStyle = g.done ? '#69f0ae' : '#ffd54a';
+    ctx.beginPath(); ctx.roundRect(cx, by, Math.max(2 * z, cw * g.progress), 5 * z, 2.5 * z); ctx.fill();
+  } else {
+    ctx.font = `${Math.round(17 * z)}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = g.done ? '#9ff0b4' : 'rgba(255,255,255,0.35)';
+    ctx.fillText(g.done ? '✓' : '🔒', x + w - 14 * z, y + hh * 0.46);
+  }
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawKennel() {
+  const ctx = renderer.ctx;
+  const L = kennelLayout();
+  const { z, px, py, pw, ph } = L;
+  const goals = currentGoals();
+  const groups = groupGoals(goals);
+  const sum = goalsSummary(goals);
+  clampKennelScroll();
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.9)';
+  ctx.fillRect(0, 0, L.w, L.h);
+  solidPanel(ctx, px, py, pw, ph, z);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(24 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('🏠 Питомник', L.w / 2, py + 34 * z);
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = `${Math.round(14 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`${sum.done} из ${sum.total} целей · ${Math.round(sum.percent * 100)}%`,
+    L.w / 2, py + 56 * z);
+  const gw = pw - 56 * z, gx = px + 28 * z, gy = py + 66 * z;
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  ctx.beginPath(); ctx.roundRect(gx, gy, gw, 6 * z, 3 * z); ctx.fill();
+  ctx.fillStyle = '#ffd54a';
+  ctx.beginPath(); ctx.roundRect(gx, gy, Math.max(2 * z, gw * sum.percent), 6 * z, 3 * z); ctx.fill();
+
+  // Список: обрезаем по окну прокрутки, рисуем только видимые строки
+  ctx.save();
+  ctx.beginPath(); ctx.rect(px + 6 * z, L.viewTop, pw - 12 * z, L.viewH); ctx.clip();
+  const vBot = L.viewTop + L.viewH;
+  let y = L.viewTop - app.kennelScroll;
+  for (const grp of groups) {
+    if (y + L.secH > L.viewTop && y < vBot) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillText(grp.title.toUpperCase(), px + 20 * z, y + L.secH * 0.66);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = grp.done === grp.total ? '#9ff0b4' : 'rgba(255,255,255,0.55)';
+      ctx.fillText(`${grp.done}/${grp.total}`, px + pw - 20 * z, y + L.secH * 0.66);
+      ctx.textBaseline = 'alphabetic';
+    }
+    y += L.secH;
+    for (const g of grp.goals) {
+      if (y + L.rowH > L.viewTop && y < vBot) drawGoalRow(ctx, g, px + 16 * z, y, pw - 32 * z, L.rowH, z);
+      y += L.rowH;
+    }
+  }
+  ctx.restore();
+
+  // Полоса прокрутки: без неё непонятно, что список длинный
+  const contentH = kennelContentH(L, groups);
+  if (contentH > L.viewH) {
+    const trackX = px + pw - 9 * z;
+    const kh = Math.max(24 * z, L.viewH * (L.viewH / contentH));
+    const kt = L.viewTop + (L.viewH - kh) * (app.kennelScroll / (contentH - L.viewH));
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath(); ctx.roundRect(trackX, L.viewTop, 4 * z, L.viewH, 2 * z); ctx.fill();
+    ctx.fillStyle = 'rgba(255,213,74,0.65)';
+    ctx.beginPath(); ctx.roundRect(trackX, kt, 4 * z, kh, 2 * z); ctx.fill();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(fitText(ctx, IS_TOUCH ? 'Свайп — прокрутка · тап мимо — назад'
+    : 'Колесо / ↑↓ — прокрутка · K / ESC — назад', pw - 32 * z), L.w / 2, py + ph - 16 * z);
+  ctx.restore();
+}
+
+// ---------- КАЛЕНДАРЬ-АРХИВ ТРАСС ДНЯ (S4.11) ----------
+// Trackmania Track of the Day: месяц как сетка, у сыгранного дня — медаль,
+// пропуски серые, будущее выключено. Перебег прошедшего дня разрешён, но вне зачёта.
+function rawDailyBest() {
+  try { return JSON.parse(localStorage.getItem('agility_daily') || 'null'); }
+  catch { return null; }
+}
+function archiveCalendar() {
+  const cur = app.archiveCursor || (app.archiveCursor = currentCursor(new Date()));
+  return buildCalendar({ year: cur.year, month: cur.month, today: new Date(),
+    medals: loadMedals(), dailyBest: rawDailyBest() });
+}
+function openArchive() {
+  app.archiveCursor = currentCursor(new Date());
+  app.state = 'archive';
+}
+function archiveStep(dir) {
+  const cal = archiveCalendar();
+  const next = dir < 0 ? prevMonth(app.archiveCursor, cal.bounds)
+    : nextMonth(app.archiveCursor, cal.bounds);
+  if (!next) return;          // шаг за границы данных модуль запрещает — молча игнорируем
+  app.archiveCursor = next;
+  audio.click();
+}
+function startArchiveRun(day) {
+  app.mode = 'daily';
+  app.archiveDay = { key: day.key, seed: day.seed, cls: day.cls,
+    modifier: day.modifier, scored: day.isScored !== false };
+  audio.click();
+  track('archive_run', { day: day.key, scored: day.isScored !== false, cls: day.cls });
+  startRun();                 // тот же путь, что и обычная трасса дня
+}
+
+function drawUnscoredBadge(ctx, cx, cy, z) {
+  const txt = '⚠ Вне зачёта — перебег прошедшего дня';
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  const tw = ctx.measureText(txt).width;
+  ctx.fillStyle = 'rgba(60,40,10,0.75)';
+  ctx.strokeStyle = 'rgba(255,171,107,0.8)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(cx - tw / 2 - 12 * z, cy - 13 * z, tw + 24 * z, 23 * z, 11 * z);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffab6b';
+  ctx.fillText(txt, cx, cy + 3 * z);
+  ctx.restore();
+}
+
+function drawArchive() {
+  const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const cal = archiveCalendar();
+  // Высота панели считается от содержимого: месяц бывает на 5 и на 6 недель,
+  // фиксированная высота оставляла бы дыру под сеткой.
+  // В портрете панель во всю ширину: клетка календаря должна оставаться под палец.
+  const pw = isPortrait() ? w * 0.94 : Math.min(560 * z, w * 0.94);
+  const cellW = (pw - 40 * z) / 7;
+  const rowsN = Math.max(1, cal.weeks.length);
+  const cellH = Math.min(cellW * 1.15, 72 * z);
+  const ph = Math.min(h * 0.94, (112 + 96) * z + rowsN * cellH);
+  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(6,12,10,0.9)';
+  ctx.fillRect(0, 0, w, h);
+  solidPanel(ctx, px, py, pw, ph, z);
+  app.archivePanel = { x: px, y: py, w: pw, h: ph };
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = `900 ${Math.round(22 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText('📅 Архив трасс дня', w / 2, py + 32 * z);
+
+  // Месяц + стрелки листания (неактивные видны, но глушатся)
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(`${cal.monthName} ${cal.year}`, w / 2, py + 62 * z);
+  const ar = 17 * z, ay = py + 56 * z;
+  const arrows = {
+    prev: { x: px + 34 * z, y: ay, r: ar, on: cal.canPrev },
+    next: { x: px + pw - 34 * z, y: ay, r: ar, on: cal.canNext },
+  };
+  app.archiveArrows = arrows;
+  for (const [key, a] of Object.entries(arrows)) {
+    ctx.globalAlpha = a.on ? 1 : 0.25;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = `bold ${Math.round(18 * z)}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(key === 'prev' ? '‹' : '›', a.x, a.y + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.globalAlpha = 1;
+
+  // Сетка месяца
+  const gx = px + 20 * z;
+  const headY = py + 92 * z;
+  ctx.font = `bold ${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  cal.weekdayLabels.forEach((lbl, i) => ctx.fillText(lbl, gx + cellW * (i + 0.5), headY));
+  const gridTop = headY + 10 * z;
+  app.archiveCells = [];
+  cal.weeks.forEach((week, r) => {
+    week.forEach((day, c) => {
+      if (!day) return;
+      const cx = gx + cellW * c, cy = gridTop + cellH * r;
+      const bx = cx + 2 * z, by = cy + 2 * z, bw = cellW - 4 * z, bh = cellH - 4 * z;
+      ctx.save();
+      if (day.isFuture) ctx.globalAlpha = 0.28;
+      ctx.fillStyle = day.played ? 'rgba(255,213,74,0.16)'
+        : day.missed ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.03)';
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 7 * z); ctx.fill();
+      if (day.isToday) {
+        ctx.strokeStyle = '#ffd54a'; ctx.lineWidth = 2 * z;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 7 * z); ctx.stroke();
+      } else if (day.played) {
+        ctx.strokeStyle = 'rgba(255,213,74,0.35)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 7 * z); ctx.stroke();
+      }
+      ctx.textAlign = 'left';
+      ctx.font = `${Math.round(10 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = day.isToday ? '#ffd54a'
+        : day.missed ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.65)';
+      ctx.fillText(String(day.dayNum % 100), bx + 5 * z, by + 12 * z);
+      ctx.textAlign = 'center';
+      if (day.played) {
+        ctx.font = `${Math.round(19 * z)}px "Segoe UI", sans-serif`;
+        ctx.fillText(day.medalIcon || '✔', bx + bw / 2, by + bh * 0.62);
+        if (day.points != null) {
+          ctx.font = `${Math.round(9 * z)}px "Segoe UI", sans-serif`;
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          ctx.fillText(String(day.points), bx + bw / 2, by + bh - 5 * z);
+        }
+      } else if (day.missed) {
+        ctx.font = `${Math.round(15 * z)}px "Segoe UI", sans-serif`;
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillText('·', bx + bw / 2, by + bh * 0.66);
+      }
+      ctx.restore();
+      app.archiveCells.push({ x: bx, y: by, w: bw, h: bh, day });
+    });
+  });
+
+  // Сводка месяца
+  const s = cal.summary;
+  ctx.textAlign = 'center';
+  const maxW = pw - 32 * z;
+  ctx.font = `bold ${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = '#e8f5ec';
+  ctx.fillText(fitText(ctx,
+    `Сыграно ${s.played} · пропущено ${s.missed} · лучшая серия ${s.longestStreak} дн`, maxW),
+    w / 2, py + ph - 60 * z);
+  ctx.font = `${Math.round(13 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText(`💎 ${s.medals[4]}   🥇 ${s.medals[3]}   🥈 ${s.medals[2]}   🥉 ${s.medals[1]}`,
+    w / 2, py + ph - 40 * z);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = `${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+  ctx.fillText(fitText(ctx, 'Тап по дню — перебежать · прошедшие дни вне зачёта · A / ESC — назад', maxW),
+    w / 2, py + ph - 18 * z);
+  ctx.restore();
+}
+
+function handleArchiveTap(p) {
+  const a = app.archiveArrows || {};
+  for (const [key, zn] of Object.entries(a)) {
+    if (Math.hypot(p.x - zn.x, p.y - zn.y) <= zn.r + 6) { archiveStep(key === 'prev' ? -1 : 1); return true; }
+  }
+  for (const c of app.archiveCells || []) {
+    if (p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h) {
+      if (c.day.playable) startArchiveRun(c.day);
+      return true;            // будущий день — просто глухой тап, экран не закрываем
+    }
+  }
+  const pr = app.archivePanel;
+  if (pr && p.x >= pr.x && p.x <= pr.x + pr.w && p.y >= pr.y && p.y <= pr.y + pr.h) return true;
+  return false;
+}
+
 // ---------- ГАЗЕТНАЯ ВЫРЕЗКА (победа над боссом) ----------
 function drawNews() {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
@@ -2648,6 +3109,8 @@ function drawTrophyIcon() {
     [questsZone(), '📋', qDone < 3 ? `${qDone}/3` : '✓'],
     [settingsZone(), '⚙️', null],
     [dossierZone(), '📖', null],
+    [kennelZone(), '🏠', kennelBadge()],
+    [archiveZone(), '📅', null],
   ]) {
     ctx.fillStyle = 'rgba(10,20,15,0.55)';
     ctx.beginPath(); ctx.arc(zone.x, zone.y, zone.r, 0, Math.PI * 2); ctx.fill();
@@ -3532,6 +3995,16 @@ function wrapText(ctx, text, x, y, maxW, lh, maxLines = 99) {
 }
 
 // ---------- РЕЗУЛЬТАТЫ ----------
+// Геометрия панели протокола — одна формула на отрисовку и на хит-тест кнопок.
+// Панель выросла против S3: снизу добавился блок «ближайшие цели» (S4.10).
+function resultsPanel() {
+  const w = canvas.width, h = canvas.height;
+  const z = Math.min(w, h) / 700;
+  const pw = Math.min(520 * z, w * 0.9);
+  const ph = Math.min((IS_TOUCH ? 732 : 664) * z, h * 0.96);
+  return { w, h, z, pw, ph, px: w / 2 - pw / 2, py: h / 2 - ph / 2 };
+}
+
 function drawResults(run, z) {
   const ctx = renderer.ctx, w = canvas.width, h = canvas.height;
   if (!app.result) {
@@ -3559,8 +4032,12 @@ function drawResults(run, z) {
     } else if (mod.mult > 1) {
       app.result.points = Math.round(app.result.points * mod.mult);
     }
-    app.newMedal = recordMedal(app.result.stars);
-    if (app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
+    // Перебег прошедшего дня из архива (S4.11) — вне зачёта: ни медали, ни рекорда
+    // дня, ни онлайн-сабмита. Локальная статистика и XP при этом живут как обычно.
+    const scored = !run.unscored;
+    app.newMedal = scored ? recordMedal(app.result.stars) : false;
+    app.newDailyBest = false;
+    if (scored && app.mode === 'daily') app.newDailyBest = saveDailyBest(app.result.points);
     // Босс-дуэль: победа = квалификация + время быстрее призрака
     if (run.ghost && run.bossCls) {
       const won = app.result.qualified && run.time < run.ghost.time;
@@ -3587,7 +4064,7 @@ function drawResults(run, z) {
       track('achievement_unlock', { id: a.id });
       audio.fanfare();
     }
-    if (app.result.points > app.bestPoints) {
+    if (scored && app.result.points > app.bestPoints) {
       app.bestPoints = app.result.points;
       localStorage.setItem('agility_best', String(app.bestPoints));
     }
@@ -3613,7 +4090,7 @@ function drawResults(run, z) {
         risks: run.focus?.used || 0, golden: !!run.goldenWeave,
         obstacles: obStats, obstacle_count: run.marks.length,
         mode: app.mode, cls: app.cls, breed: run.breed.name });
-      if (app.result.points > 0) submitOnline(app.result.points, run.time);
+      if (scored && app.result.points > 0) submitOnline(app.result.points, run.time);
     }
 
     // ---- V2 Мета: перфект-челлендж (4-я звезда), валюты, XP, задания ----
@@ -3623,7 +4100,7 @@ function drawResults(run, z) {
       if (res0.stars === 3 && run.score.perfects === run.marks.length
           && res0.totalFaults === 0 && run.time <= run.sct - 3) {
         res0.stars = 4;
-        app.newMedal = recordMedal(4) || app.newMedal;
+        if (scored) app.newMedal = recordMedal(4) || app.newMedal;
       }
       const trackId = courseKey();
       const dkey = new Date().toDateString();
@@ -3641,7 +4118,7 @@ function drawResults(run, z) {
       }
       const earned = earnFromRun(meta, {
         points: res0.points, stars: Math.min(3, res0.stars), trackId,
-        isDaily: app.mode === 'daily', todayStr: todayStr(),
+        isDaily: scored && app.mode === 'daily', todayStr: todayStr(),
         runOfDay: meta.counters.runsToday.n,
       });
       // Заначка сработала молча — сообщаем постфактум (Duolingo-паттерн)
@@ -3705,11 +4182,12 @@ function drawResults(run, z) {
     run._stamps = run._stamps || {};
     if (ft >= a && !run._stamps[a]) { run._stamps[a] = 1; audio.click(); }
   };
-  const pw = Math.min(520 * z, w * 0.9), ph = Math.min((IS_TOUCH ? 668 : 600) * z, h * 0.96);
-  const px = w / 2 - pw / 2, py = h / 2 - ph / 2;
+  const { pw, ph, px, py } = resultsPanel();
   // Слоты нижней части протокола: медаль — герой (крупная, без рамки), внизу у Хлои воздух.
-  //   slot1 — итог против времени/призрака, medal — крупная медаль, earn — награда+XP, chloe — промо
-  const SL = { one: 334 * z, medal: 394 * z, medalCap: 414 * z, earn: 438 * z, chloe: 496 * z };
+  //   slot1 — итог против времени/призрака, medal — крупная медаль, earn — награда+XP,
+  //   goals — три ближайшие цели (S4.10), chloe — промо
+  const SL = { one: 334 * z, medal: 394 * z, medalCap: 414 * z, earn: 438 * z,
+    goals: 466 * z, chloe: 560 * z };
   ctx.save();
   // Сильнее гасим сцену за протоколом (по ревью Codex: конфетти/HUD мешали читать)
   ctx.fillStyle = `rgba(6,12,10,${0.86 * ease(0, 0.3)})`;
@@ -3857,6 +4335,53 @@ function drawResults(run, z) {
     ctx.restore();
   }
 
+  // slot «goals» — три ближайшие цели (S4.10): «во что играть дальше». Появляется
+  // последним, чтобы не спорить с медалью-героем. В разминке и вне зачёта — молчим.
+  if (ft > 3.6 && !run.warmup && !run.unscored) {
+    const near = nearestGoals(currentGoals(), 3);
+    if (near.length) {
+      const k = ease(3.6, 0.4);
+      const bw = pw - 56 * z, bx = w / 2 - bw / 2, top = py + SL.goals;
+      ctx.save();
+      ctx.globalAlpha = k;
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.beginPath(); ctx.roundRect(bx, top, bw, 74 * z, 10 * z); ctx.fill();
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillText('🎯 БЛИЖАЙШИЕ ЦЕЛИ', bx + 12 * z, top + 13 * z);
+      near.forEach((g, i) => {
+        const yy = top + (30 + i * 17) * z;
+        ctx.textAlign = 'left';
+        ctx.font = `${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+        ctx.fillStyle = '#fff';
+        ctx.fillText(g.icon, bx + 12 * z, yy);
+        ctx.font = `${Math.round(12 * z)}px "Segoe UI", sans-serif`;
+        ctx.fillStyle = '#e8f5ec';
+        ctx.fillText(fitText(ctx, g.name, bw * 0.44), bx + 32 * z, yy);
+        // мини-бар
+        const mx = bx + bw * 0.54, mw = bw * 0.24;
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.beginPath(); ctx.roundRect(mx, yy - 2.5 * z, mw, 5 * z, 2.5 * z); ctx.fill();
+        ctx.fillStyle = '#ffd54a';
+        ctx.beginPath(); ctx.roundRect(mx, yy - 2.5 * z, Math.max(2 * z, mw * g.progress), 5 * z, 2.5 * z); ctx.fill();
+        ctx.textAlign = 'right';
+        ctx.font = `${Math.round(11 * z)}px "Segoe UI", sans-serif`;
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        // «ещё N» врёт, когда счётчик уже добит, но цель не закрыта (косметика:
+        // косточки накоплены — осталось зайти в магазин).
+        const left = g.target ? Math.max(0, g.target - g.current) : 0;
+        ctx.fillText(g.target
+          ? (left > 0 ? `ещё ${fmtNum(left)}` : (g.kind === 'cosmetic' ? 'в магазин' : 'вот-вот'))
+          : 'открыть', bx + bw - 12 * z, yy);
+      });
+      ctx.restore();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    }
+  }
+  // Перебег из архива: честная плашка вместо блока целей
+  if (ft > 3.6 && run.unscored) drawUnscoredBadge(ctx, w / 2, py + SL.goals + 30 * z, z);
+
   // slot4 — промо Хлои: после провала поддержка, после победы приглашение в дневник
   if (ft > 2.8) {
     const chloeMsg = res.qualified
@@ -3884,7 +4409,7 @@ function drawResults(run, z) {
           ? `Класс ${CLASSES[nextClass(app.cls)].name}!`
           : 'Следующая трасса')
         : 'Ещё попытка')
-      : app.mode === 'daily' ? 'Ещё попытка (лучший в зачёт)'
+      : app.mode === 'daily' ? (run.unscored ? 'Ещё попытка (вне зачёта)' : 'Ещё попытка (лучший в зачёт)')
       : 'Следующая трасса чемпионата';
     if (IS_TOUCH) {
       // Тач: настоящие кнопки вместо клавиатурных подсказок
@@ -3964,7 +4489,8 @@ let _prevScreen = null;
 function trackScreen() {
   if (app.state === _prevScreen) return;
   _prevScreen = app.state;
-  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'results', 'champion', 'news',
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'kennel', 'archive',
+    'results', 'champion', 'news',
     'trainer', 'calib', 'photo', 'podium', 'treat'].includes(app.state)) {
     track('screen_open', { screen: app.state, mode: app.mode });
   }
@@ -3976,7 +4502,7 @@ function frame(now) {
   app.t += dt;
   trackScreen();
 
-  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier'].includes(app.state)) {
+  if (['menu', 'board', 'shop', 'quests', 'settings', 'dossier', 'kennel', 'archive'].includes(app.state)) {
     audio.music?.setState('menu');
     drawMenu(dt);
     drawMuteIcon();
@@ -3986,6 +4512,8 @@ function frame(now) {
     if (app.state === 'quests') drawQuests();
     if (app.state === 'settings') drawSettings();
     if (app.state === 'dossier') drawDossier();
+    if (app.state === 'kennel') drawKennel();
+    if (app.state === 'archive') drawArchive();
     drawToasts(dt);
   } else if (app.state === 'calib') {
     drawCalib();
@@ -4071,6 +4599,8 @@ window.__agility = {
     app.photoDone = true;
   },
   menuIdle,
+  // S4.10/S4.11: витрина целей и календарь-архив (для e2e и ручной приёмки)
+  openKennel, openArchive, startArchiveRun, kennelScrollBy,
   openPodium,
   openTreat, treatAdvance, togglePhotoMode,
   pressKey(code) { app.run?.input(code, true); },
